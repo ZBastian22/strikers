@@ -1,4 +1,6 @@
 #include "Game/CharacterTemplate.h"
+#include "NL/nlConfig.h"
+#include "dolphin/os.h"
 #include "Game/SHierarchy.h"
 #include "Game/SAnim/AnimRetargeter.h"
 #include "Game/Player.h"
@@ -543,6 +545,38 @@ static inline bool SameCharacterClass(const eCharacterClass* first, const eChara
     return first[index] == second[index];
 }
 
+// MOD (mixed teams): with `mixed_teams` on, each of a team's three sidekick slots may hold its own
+// character. The keys are team1_slot2, team1_slot3, team1_slot4 and team2_slot2..team2_slot4, and a
+// value is any character name the game already knows: a sidekick ("toad", "koopa", "hammerbro",
+// "birdo") or a captain ("mario", "luigi", "peach", "daisy", "yoshi", "donkeykong", "wario",
+// "waluigi"). A slot that is unset or misspelt falls back to the team's normal sidekick.
+static eCharacterClass MixedTeamSlotClass(const char* key, eCharacterClass fallback)
+{
+    Config& cfg = Config::Global();
+    if (!cfg.Exists(key))
+    {
+        return fallback;
+    }
+
+    BasicString<char, Detail::TempStringAllocator> name
+        = cfg.Get<BasicString<char, Detail::TempStringAllocator> >(key, BasicString<char, Detail::TempStringAllocator>(""));
+
+    eSidekickID sk = ConvertToSidekickID(name.c_str());
+    if (sk != SK_INVALID)
+    {
+        return ConvertToCharacterClass(sk);
+    }
+
+    eTeamID team = ConvertToTeamID(name.c_str());
+    if (team != TEAM_INVALID && team != TEAM_MYSTERY)
+    {
+        return ConvertToCharacterClass(team);
+    }
+
+    OSReport("[mixed teams] %s=%s is not a character name; using the team's sidekick\n", key, name.c_str());
+    return fallback;
+}
+
 /**
  * Offset/Address/Size: 0x954 | 0x80012C3C | size: 0x51C
  */
@@ -565,6 +599,13 @@ void CreateCharacters()
     {
         sidekick[0] = captain[0];
         sidekick[1] = captain[1];
+    }
+
+    // MOD (mixed teams): the toggle. Off, and the game builds teams exactly as it always did.
+    bool mixedTeams = GetConfigBool(cfg, "mixed_teams", false);
+    if (mixedTeams)
+    {
+        OSReport("[mixed teams] on: each sidekick slot may hold its own character\n");
     }
 
     if (captain[0] == MYSTERY)
@@ -626,13 +667,28 @@ void CreateCharacters()
 
         for (int index = 1; index < 4; index++)
         {
-            if (SameCharacterClass(sidekick, captain, plrindex))
+            // MOD (mixed teams): what goes in this slot. Normally the team's one sidekick.
+            eCharacterClass slotcc = sidekick[plrindex];
+            if (mixedTeams && captain[plrindex] != MYSTERY)
+            {
+                char szKey[32];
+                nlSNPrintf(szKey, 32, "team%d_slot%d", plrindex + 1, index + 1);
+                slotcc = MixedTeamSlotClass(szKey, sidekick[plrindex]);
+            }
+
+            if (slotcc == captain[plrindex])
             {
                 g_pCharacters[charIdx] = CreateCharacter(index, plrindex, captain[plrindex], false);
             }
+            else if (IsCaptain(slotcc))
+            {
+                // A captain playing as a sidekick: built the same way the captain is. No per-captain kit
+                // exists for them, so they keep their own team's colours.
+                g_pCharacters[charIdx] = CreateCharacter(index, plrindex, slotcc, false);
+            }
             else
             {
-                g_pCharacters[charIdx] = (cCharacter*)CreateSidekick(index, plrindex, sidekick[plrindex], captain[plrindex], false);
+                g_pCharacters[charIdx] = (cCharacter*)CreateSidekick(index, plrindex, slotcc, captain[plrindex], false);
             }
 
             g_pCharacters[charIdx]->SetPosition(pos[charIdx]);

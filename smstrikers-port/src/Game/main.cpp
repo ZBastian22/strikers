@@ -221,10 +221,17 @@ static void Initialize()
     }
 
     {
-        static const char* const kTeamVars[4][2] = {
+        // MOD (mixed teams): STRIKERS_MIXED_TEAMS=1 turns it on; STRIKERS_TEAM1_SLOT2..4 and
+        // STRIKERS_TEAM2_SLOT2..4 name the character in each sidekick slot.
+        static const char* const kTeamVars[11][2] = {
             {"STRIKERS_TEAM1", "team1"}, {"STRIKERS_TEAM2", "team2"},
-            {"STRIKERS_SIDEKICK1", "sidekick1"}, {"STRIKERS_SIDEKICK2", "sidekick2"}};
-        for (int i = 0; i < 4; ++i)
+            {"STRIKERS_SIDEKICK1", "sidekick1"}, {"STRIKERS_SIDEKICK2", "sidekick2"},
+            {"STRIKERS_MIXED_TEAMS", "mixed_teams"},
+            {"STRIKERS_TEAM1_SLOT2", "team1_slot2"}, {"STRIKERS_TEAM1_SLOT3", "team1_slot3"},
+            {"STRIKERS_TEAM1_SLOT4", "team1_slot4"},
+            {"STRIKERS_TEAM2_SLOT2", "team2_slot2"}, {"STRIKERS_TEAM2_SLOT3", "team2_slot3"},
+            {"STRIKERS_TEAM2_SLOT4", "team2_slot4"}};
+        for (int i = 0; i < 11; ++i)
         {
             const char* v = getenv(kTeamVars[i][0]);
             if (v != NULL && *v != '\0')
