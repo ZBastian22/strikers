@@ -975,17 +975,25 @@ static const MixedSheenRGB kMixedSheenColours[] = {
 
 // How strongly the wash reads, 0-255. It scales the colour itself, because the
 // overlay is additive: darker colour, fainter sheen.
-static int gMixedSheenStrength = 90;
+static int gMixedSheenStrength = 130;
 
 // Which characters carry a sheen this match, and the overlay entry each uses.
 static const cCharacter* gMixedSheenChar[10];
 static EffectsTexturing gMixedSheenFx[10];
+
+static int gMixedOutline = 0; // 0-100, the slider; 0 is off
+static const cCharacter* gMixedOutlineChar[10];
+static u32 gMixedOutlineTex[10];
 
 static void MixedSheenReset()
 {
     for (int i = 0; i < 10; ++i)
     {
         gMixedSheenChar[i] = NULL;
+    }
+    for (int i = 0; i < 10; ++i)
+    {
+        gMixedOutlineChar[i] = NULL;
     }
 }
 
@@ -1003,8 +1011,9 @@ EffectsTexturing* MixedTeamSheenFor(const cCharacter* pChar)
     return NULL;
 }
 
-// An 8x8 texture of one flat colour, registered under the given name.
-static u32 MixedMakeSolidTexture(const char* name, u8 r, u8 g, u8 b)
+// An 8x8 image of one flat colour. Layered over the character the way the star
+// power-up glow is, it tints him without replacing his own skin.
+static u32 MixedMakeGlowTexture(const char* name, u8 r, u8 g, u8 b)
 {
     u32 handle = glGetTexture(name);
     if (glx_GetTex(handle, false, false) != NULL)
@@ -1024,8 +1033,6 @@ static u32 MixedMakeSolidTexture(const char* name, u8 r, u8 g, u8 b)
         return (u32)-1;
     }
 
-    // Opaque 5:5:5, the same value in all 64 texels; tiling doesn't matter when
-    // every texel is identical.
     u16 texel = (u16)(0x8000 | ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
     u8* data = (u8*)pTex->m_SwizzledData;
     for (int i = 0; i < 64; ++i)
@@ -1076,9 +1083,9 @@ static void MixedApplySheen(cCharacter* pChar, eCharacterClass captaincc)
     if (strength > 255) { strength = 255; }
 
     char szName[64];
-    nlSNPrintf(szName, 64, "auto_sheen_%s", GetCharacterName(captaincc));
+    nlSNPrintf(szName, 64, "auto_glow_%s", GetCharacterName(captaincc));
 
-    u32 texHandle = MixedMakeSolidTexture(szName,
+    u32 texHandle = MixedMakeGlowTexture(szName,
                                           (u8)(pColour->r * strength / 255),
                                           (u8)(pColour->g * strength / 255),
                                           (u8)(pColour->b * strength / 255));
@@ -1089,13 +1096,87 @@ static void MixedApplySheen(cCharacter* pChar, eCharacterClass captaincc)
     }
 
     gMixedSheenFx[slot].m_uTexture = texHandle;
-    gMixedSheenFx[slot].m_eBlendMode = GLB_ScaledAdditive; // the ice overlay's blend: a soft wash
-    gMixedSheenFx[slot].m_bEnviro = false;
-    gMixedSheenFx[slot].m_bDetail = false;
+    gMixedSheenFx[slot].m_eBlendMode = GLB_None;   // the star glow settings: layered on top,
+    gMixedSheenFx[slot].m_bEnviro = false;         // not replacing the skin, so the model stays
+    gMixedSheenFx[slot].m_bDetail = true;          // solid and fully himself
     gMixedSheenChar[slot] = pChar;
 
     OSReport("[mixed teams] sheen on %s in %s colours (strength %d)\n",
              GetCharacterName(pChar->m_eCharacterClass), GetCharacterName(captaincc), strength);
+}
+
+// ---------------------------------------------------------------------------
+// MOD (mixed teams): true outline.
+//
+// The character is drawn a second time, inflated a few percent around his own
+// centre, in flat team colour, back faces only. The real model covers all of it
+// except a thin rim past his edges: a drawn outline that follows the pose.
+// The slider (0-100) sets how far the shell sticks out; 0 turns it off.
+// ---------------------------------------------------------------------------
+
+// The per-frame lookup, called from the drawing code. Not static:
+// DrawableCharacter.cpp reaches it.
+bool MixedOutlineFor(const cCharacter* pChar, unsigned long* pTex, float* pScale)
+{
+    if (gMixedOutline <= 0 || pChar == NULL)
+    {
+        return false;
+    }
+    for (int i = 0; i < 10; ++i)
+    {
+        if (gMixedOutlineChar[i] == pChar)
+        {
+            *pTex = gMixedOutlineTex[i];
+            *pScale = 1.0f + (float)gMixedOutline * 0.0006f; // 100 -> 6% bigger
+            return true;
+        }
+    }
+    return false;
+}
+
+static void MixedApplyOutline(cCharacter* pChar, eCharacterClass captaincc)
+{
+    const MixedSheenRGB* pColour = NULL;
+    for (unsigned int i = 0; i < sizeof(kMixedSheenColours) / sizeof(kMixedSheenColours[0]); ++i)
+    {
+        if (kMixedSheenColours[i].cc == captaincc)
+        {
+            pColour = &kMixedSheenColours[i];
+            break;
+        }
+    }
+    if (pColour == NULL || pChar == NULL)
+    {
+        return;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < 10; ++i)
+    {
+        if (gMixedOutlineChar[i] == NULL)
+        {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0)
+    {
+        return;
+    }
+
+    char szName[64];
+    nlSNPrintf(szName, 64, "auto_outline_%s", GetCharacterName(captaincc));
+    u32 tex = MixedMakeGlowTexture(szName, pColour->r, pColour->g, pColour->b);
+    if (tex == (u32)-1)
+    {
+        OSReport("[mixed teams] could not build outline texture for %s\n", GetCharacterName(captaincc));
+        return;
+    }
+
+    gMixedOutlineTex[slot] = tex;
+    gMixedOutlineChar[slot] = pChar;
+    OSReport("[mixed teams] outline on %s in %s colours (size %d)\n",
+             GetCharacterName(pChar->m_eCharacterClass), GetCharacterName(captaincc), gMixedOutline);
 }
 
 // MOD (mixed teams): with `mixed_teams` on, each of a team's three sidekick slots may hold its own
@@ -1165,7 +1246,9 @@ void CreateCharacters()
         gMixedHueWindow = GetConfigInt(cfg, "mixed_hue_window", 45);
         gMixedMinSat = GetConfigInt(cfg, "mixed_min_saturation", 90);
         gMixedMinVal = GetConfigInt(cfg, "mixed_min_brightness", 40);
-        gMixedSheenStrength = GetConfigInt(cfg, "mixed_sheen_strength", 90);
+        gMixedSheenStrength = GetConfigInt(cfg, "mixed_sheen_strength", 130);
+        gMixedOutline = GetConfigInt(cfg, "mixed_outline", 0);
+        if (gMixedOutline > 100) { gMixedOutline = 100; }
         OSReport("[mixed teams] on: each sidekick slot may hold its own character (recolour %s, sheen %s)\n",
                  mixedRecolour ? "on" : "off", mixedSheen ? "on" : "off");
     }
@@ -1255,6 +1338,10 @@ void CreateCharacters()
                 if (mixedSheen)
                 {
                     MixedApplySheen(g_pCharacters[charIdx], captain[plrindex]);
+                }
+                if (gMixedOutline > 0)
+                {
+                    MixedApplyOutline(g_pCharacters[charIdx], captain[plrindex]);
                 }
             }
             else
