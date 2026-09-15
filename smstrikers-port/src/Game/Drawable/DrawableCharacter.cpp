@@ -810,6 +810,47 @@ void DrawableCharacter::SendToGl(const cCharacter& character) const
         {
             gl_ModifyClearLastMapping();
         }
+
+        // MOD (mixed teams): the outline shell. The same posed body again, inflated a
+        // few percent around the character's centre, flat team colour, back faces only.
+        // The real model in front covers everything but a rim past his edges.
+        {
+            extern bool MixedOutlineFor(const cCharacter* pChar, unsigned long* pTex, float* pScale);
+            unsigned long outlineTex;
+            float outlineScale;
+            if (MixedOutlineFor(&character, &outlineTex, &outlineScale))
+            {
+                uintptr_t hInflate = glAllocMatrix();
+                if (hInflate != 0xFFFFFFFF)
+                {
+                    nlMatrix4 mInflate;
+                    mInflate.SetIdentity();
+                    mInflate.m11 = outlineScale;
+                    mInflate.m22 = outlineScale;
+                    mInflate.m33 = outlineScale;
+                    mInflate.m41 = mBip01Position.x * (1.0f - outlineScale);
+                    mInflate.m42 = mBip01Position.y * (1.0f - outlineScale);
+                    mInflate.m43 = mBip01Position.z * (1.0f - outlineScale);
+                    glSetMatrix(hInflate, mInflate);
+
+                    glModel* pShell = glModelDup(skinMesh->pModel, true);
+                    for (glModelPacket* pP = pShell->packets; pP < pShell->packets + pShell->numPackets; pP++)
+                    {
+                        pP->state.matrix = hInflate;
+                        if (pLightData != nullptr)
+                        {
+                            glUserAttach(pLightData, pP, false);
+                        }
+                        pP->state.texture[GLTT_Diffuse] = outlineTex;
+                        pP->state.texture[GLTT_BumpLocal] = lightTexture;
+                        pP->state.texconfig |= GLTT_BumpLocal_bit;
+                        pP->state.texconfig &= ~((1UL << (int)GLTT_Detail) | (1UL << (int)GLTT_Gloss) | (1UL << (int)GLTT_SelfIllum) | (1UL << (int)GLTT_Shadow));
+                        glSetRasterState(pP->state.raster, GLS_Culling, GX_CULL_FRONT);
+                    }
+                    glViewAttachModel(GLV_Characters, pShell);
+                }
+            }
+        }
     }
 
     if (g_nShowBones > 0)
