@@ -272,6 +272,14 @@ void DrawableCharacter::Grab(cCharacter& character)
     EffectsTexturing* tex = character.m_pEffectsTexturing;
     if (tex == NULL)
     {
+        // MOD (mixed teams): a captain borrowed as a sidekick may carry a standing
+        // team-colour sheen. Real effects (ice, fire, electrocution) still win,
+        // because they occupy m_pEffectsTexturing while active.
+        extern EffectsTexturing* MixedTeamSheenFor(const cCharacter* pChar);
+        tex = MixedTeamSheenFor(&character);
+    }
+    if (tex == NULL)
+    {
         tex = fxGetTexturing(eFXTex_Nothing);
     }
     mEffectsTexturing = tex;
