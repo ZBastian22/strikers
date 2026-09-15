@@ -1116,8 +1116,14 @@ static void MixedApplySheen(cCharacter* pChar, eCharacterClass captaincc)
 
 // The per-frame lookup, called from the drawing code. Not static:
 // DrawableCharacter.cpp reaches it.
+int gMixedOutlineCull = 1; // 0 none, 1 front, 2 back: which faces of the shell to hide
+
 bool MixedOutlineFor(const cCharacter* pChar, unsigned long* pTex, float* pScale)
 {
+    static int nPtrHits = 0;
+    static int nClassHits = 0;
+    static int nMisses = 0;
+
     if (gMixedOutline <= 0 || pChar == NULL)
     {
         return false;
@@ -1126,10 +1132,35 @@ bool MixedOutlineFor(const cCharacter* pChar, unsigned long* pTex, float* pScale
     {
         if (gMixedOutlineChar[i] == pChar)
         {
+            if (nPtrHits++ < 3)
+            {
+                OSReport("[mixed teams] draw: outline matched directly (%d)\n", nPtrHits);
+            }
             *pTex = gMixedOutlineTex[i];
             *pScale = 1.0f + (float)gMixedOutline * 0.0006f; // 100 -> 6% bigger
             return true;
         }
+    }
+    // The renderer may draw from a copied snapshot of the character rather than
+    // the live object, in which case the address differs. Fall back to matching
+    // by who the character is.
+    for (int i = 0; i < 10; ++i)
+    {
+        if (gMixedOutlineChar[i] != NULL
+            && gMixedOutlineChar[i]->m_eCharacterClass == pChar->m_eCharacterClass)
+        {
+            if (nClassHits++ < 3)
+            {
+                OSReport("[mixed teams] draw: outline matched by identity, not address (%d)\n", nClassHits);
+            }
+            *pTex = gMixedOutlineTex[i];
+            *pScale = 1.0f + (float)gMixedOutline * 0.0006f;
+            return true;
+        }
+    }
+    if (nMisses++ < 3)
+    {
+        OSReport("[mixed teams] draw: character %d has no outline entry (%d)\n", (int)pChar->m_eCharacterClass, nMisses);
     }
     return false;
 }
@@ -1249,6 +1280,15 @@ void CreateCharacters()
         gMixedSheenStrength = GetConfigInt(cfg, "mixed_sheen_strength", 130);
         gMixedOutline = GetConfigInt(cfg, "mixed_outline", 0);
         if (gMixedOutline > 100) { gMixedOutline = 100; }
+        BasicString<char, Detail::TempStringAllocator> cullName
+            = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("mixed_outline_cull", BasicString<char, Detail::TempStringAllocator>("front"));
+        gMixedOutlineCull = 1;
+        if (nlStrCmp<char>(cullName.c_str(), "none") == 0) { gMixedOutlineCull = 0; }
+        if (nlStrCmp<char>(cullName.c_str(), "back") == 0) { gMixedOutlineCull = 2; }
+        if (gMixedOutline > 0)
+        {
+            OSReport("[mixed teams] outline size %d, cull %s\n", gMixedOutline, cullName.c_str());
+        }
         OSReport("[mixed teams] on: each sidekick slot may hold its own character (recolour %s, sheen %s)\n",
                  mixedRecolour ? "on" : "off", mixedSheen ? "on" : "off");
     }
