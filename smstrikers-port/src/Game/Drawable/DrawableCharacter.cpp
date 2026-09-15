@@ -818,9 +818,15 @@ void DrawableCharacter::SendToGl(const cCharacter& character) const
             extern bool MixedOutlineFor(const cCharacter* pChar, unsigned long* pTex, float* pScale);
             unsigned long outlineTex;
             float outlineScale;
+            extern int gMixedOutlineCull;
             if (MixedOutlineFor(&character, &outlineTex, &outlineScale))
             {
+                static int nShellLogs = 0;
                 uintptr_t hInflate = glAllocMatrix();
+                if (nShellLogs < 3)
+                {
+                    OSReport("[mixed teams] draw: shell pass, matrix handle %lu\n", (unsigned long)hInflate);
+                }
                 if (hInflate != 0xFFFFFFFF)
                 {
                     nlMatrix4 mInflate;
@@ -845,9 +851,17 @@ void DrawableCharacter::SendToGl(const cCharacter& character) const
                         pP->state.texture[GLTT_BumpLocal] = lightTexture;
                         pP->state.texconfig |= GLTT_BumpLocal_bit;
                         pP->state.texconfig &= ~((1UL << (int)GLTT_Detail) | (1UL << (int)GLTT_Gloss) | (1UL << (int)GLTT_SelfIllum) | (1UL << (int)GLTT_Shadow));
-                        glSetRasterState(pP->state.raster, GLS_Culling, GX_CULL_FRONT);
+                        glSetRasterState(pP->state.raster, GLS_Culling,
+                                         gMixedOutlineCull == 0 ? GX_CULL_NONE
+                                         : gMixedOutlineCull == 2 ? GX_CULL_BACK
+                                         : GX_CULL_FRONT);
                     }
                     glViewAttachModel(GLV_Characters, pShell);
+                    if (nShellLogs++ < 3)
+                    {
+                        OSReport("[mixed teams] draw: shell attached, %d packets, scale %f\n",
+                                 (int)pShell->numPackets, outlineScale);
+                    }
                 }
             }
         }
