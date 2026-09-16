@@ -581,8 +581,17 @@ static const MixedTeamHue kMixedTeamHues[] = {
     { WALUIGI, 275 },  // purple
 };
 
-// Live copy of the table, so a mod can move a hue with `kit_hue_<captain>`.
+// Live copies of the per-captain settings, so a mod can tune each captain:
+//   kit_hue_<captain>     his clothing colour on the wheel, 0-359
+//   kit_window_<captain>  how far from that hue a pixel may sit and still count as kit
+//   kit_sat_<captain>     how colourful (0-255) a pixel must be to count as kit
+//   kit_bright_<captain>  how bright his kit is, as a percentage; brightness is scaled
+//                         by (target's kit_bright / his kit_bright) when he is borrowed
 static int gMixedKitHue[8];
+static int gMixedKitWindow[8];
+static int gMixedKitSat[8];
+static int gMixedKitBright[8];
+static int gMixedBrightScale = 100; // percent, set per recolour
 
 static bool MixedTeamHueFor(eCharacterClass cc, int* outHue)
 {
@@ -597,14 +606,36 @@ static bool MixedTeamHueFor(eCharacterClass cc, int* outHue)
     return false;
 }
 
-static void MixedLoadKitHues(Config& cfg)
+static int MixedKitIndex(eCharacterClass cc)
 {
     for (unsigned int i = 0; i < sizeof(kMixedTeamHues) / sizeof(kMixedTeamHues[0]); ++i)
     {
+        if (kMixedTeamHues[i].cc == cc)
+        {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static void MixedLoadKitHues(Config& cfg)
+{
+    int window = GetConfigInt(cfg, "mixed_hue_window", 45);
+    int sat = GetConfigInt(cfg, "mixed_min_saturation", 90);
+    for (unsigned int i = 0; i < sizeof(kMixedTeamHues) / sizeof(kMixedTeamHues[0]); ++i)
+    {
+        const char* name = GetCharacterName(kMixedTeamHues[i].cc);
         char szKey[48];
-        nlSNPrintf(szKey, 48, "kit_hue_%s", GetCharacterName(kMixedTeamHues[i].cc));
+        nlSNPrintf(szKey, 48, "kit_hue_%s", name);
         int hue = GetConfigInt(cfg, szKey, kMixedTeamHues[i].hue);
         gMixedKitHue[i] = ((hue % 360) + 360) % 360;
+        nlSNPrintf(szKey, 48, "kit_window_%s", name);
+        gMixedKitWindow[i] = GetConfigInt(cfg, szKey, window);
+        nlSNPrintf(szKey, 48, "kit_sat_%s", name);
+        gMixedKitSat[i] = GetConfigInt(cfg, szKey, sat);
+        nlSNPrintf(szKey, 48, "kit_bright_%s", name);
+        int bright = GetConfigInt(cfg, szKey, 100);
+        gMixedKitBright[i] = bright < 10 ? 10 : (bright > 400 ? 400 : bright);
     }
 }
 
@@ -695,7 +726,10 @@ static bool MixedShiftPixel(int* r, int* g, int* b, int srcHue, int dstHue)
         return false;
     }
 
-    // Keep the pixel's own variation around the team hue, so shading survives.
+    // Keep the pixel's own variation around the team hue, so shading survives,
+    // and lift or drop its brightness to match the target kit.
+    v = (v * gMixedBrightScale) / 100;
+    if (v > 255) { v = 255; }
     MixedHSVtoRGB(dstHue + dist, s, v, r, g, b);
     return true;
 }
@@ -1007,6 +1041,15 @@ static void MixedApplyCaptainKit(cPlayer* pChar, eCharacterClass slotcc, eCharac
     }
 
     const char* name = GetCharacterName(slotcc);
+
+    // This captain's own net, and the brightness jump to the target kit.
+    int srcIdx = MixedKitIndex(slotcc);
+    int dstIdx = MixedKitIndex(captaincc);
+    gMixedHueWindow = gMixedKitWindow[srcIdx];
+    gMixedMinSat = gMixedKitSat[srcIdx];
+    gMixedBrightScale = (gMixedKitBright[dstIdx] * 100) / gMixedKitBright[srcIdx];
+    OSReport("[mixed teams] %s -> %s: hue %d -> %d, window %d, min sat %d, brightness x%d%%\n",
+             name, GetCharacterName(captaincc), srcHue, dstHue, gMixedHueWindow, gMixedMinSat, gMixedBrightScale);
 
     char szPath[256];
     nlSNPrintf(szPath, 256, "art/%s", g_aCharacterTemplateInfo[slotcc].szTextureFilename);
@@ -1582,10 +1625,8 @@ void CreateCharacters()
     if (mixedTeams)
     {
         // The knobs are here so a bad-looking character can be tuned without a rebuild.
-        gMixedHueWindow = GetConfigInt(cfg, "mixed_hue_window", 45);
-        gMixedMinSat = GetConfigInt(cfg, "mixed_min_saturation", 90);
         gMixedMinVal = GetConfigInt(cfg, "mixed_min_brightness", 40);
-        MixedLoadKitHues(cfg);
+        MixedLoadKitHues(cfg); // also reads mixed_hue_window / mixed_min_saturation as defaults
         gMixedSheenStrength = GetConfigInt(cfg, "mixed_sheen_strength", 130);
         gMixedOutline = GetConfigInt(cfg, "mixed_outline", 0);
         if (gMixedOutline > 100) { gMixedOutline = 100; }
