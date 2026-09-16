@@ -371,6 +371,8 @@ static void UpdateAndRenderPlayerIndicators(float)
 // 2-4 = the rest, in slot order.
 extern bool MixedNumbersOn();
 extern unsigned long MixedNumberTexture(int side, int digit);
+extern "C" int PortModsIndicator(int side, int digit, int hasBall, int isControlled, int isCaptain,
+    int* pDigit, float* pSize, float* pDy, int* pShow);
 
 static void MixedRenderTeamNumbers()
 {
@@ -432,7 +434,21 @@ static void MixedRenderTeamNumbers()
                 continue;
             }
 
-            unsigned long tex = MixedNumberTexture(side, digitOf[i]);
+            // MOD (mod layer): a script may change the digit, resize it, move it,
+            // or hide it, per player, per frame.
+            int drawDigit = digitOf[i];
+            float fSizeMul = 1.0f;
+            float fDy = 0.0f;
+            int nShow = 1;
+            PortModsIndicator(side, digitOf[i], pP->m_pBall != NULL ? 1 : 0,
+                pP->GetGlobalPad() != NULL ? 1 : 0, pP->IsCaptain() ? 1 : 0,
+                &drawDigit, &fSizeMul, &fDy, &nShow);
+            if (!nShow || drawDigit < 1 || drawDigit > 4)
+            {
+                continue;
+            }
+
+            unsigned long tex = MixedNumberTexture(side, drawDigit);
             if (tex == (unsigned long)-1)
             {
                 continue;
@@ -453,8 +469,10 @@ static void MixedRenderTeamNumbers()
             float fY = 0.5f * glGetOrthographicHeight() * (v3Screen.y + 1.0f);
             fY -= pTweaks->fIndicatorDistInPixels;
 
+            fY += fDy;
+
             // The 1 is drawn a touch larger, so the ball carrier still stands out.
-            float fSize = (digitOf[i] == 1) ? s_fOverheadSize * 1.25f : s_fOverheadSize;
+            float fSize = ((drawDigit == 1) ? s_fOverheadSize * 1.25f : s_fOverheadSize) * fSizeMul;
             DrawIndicator((int)fX, (int)fY, fSize, fSize, fMaxAlpha, tex, 0.0f, 1);
         }
     }
