@@ -9,6 +9,7 @@
 #include "Game/Drawable/DrawableCharacter.h"
 #include "Game/Player.h"
 #include "Game/ReplayManager.h"
+#include "Game/Team.h"
 #include "NL/gl/glDraw2.h"
 #include "NL/gl/glState.h"
 #include "NL/gl/glTexture.h"
@@ -364,10 +365,112 @@ static void UpdateAndRenderPlayerIndicators(float)
 /**
  * Offset/Address/Size: 0x0 | 0x8015F264 | size: 0xA8
  */
+// MOD (mixed teams): team numbers. Replaces the controller number over the
+// controlled player with a number over every fielder, in his captain's colour.
+// 1 = has the ball (or is being controlled when nobody on the team does),
+// 2-4 = the rest, in slot order.
+extern bool MixedNumbersOn();
+extern unsigned long MixedNumberTexture(int side, int digit);
+
+static void MixedRenderTeamNumbers()
+{
+    int digitOf[10];
+    for (int i = 0; i < 10; ++i)
+    {
+        digitOf[i] = 0;
+    }
+
+    for (int side = 0; side < 2; ++side)
+    {
+        cTeam* pTeam = g_pTeams[side];
+        if (pTeam == NULL)
+        {
+            continue;
+        }
+
+        // Who gets the 1: ball carrier, else a controlled player, else the captain.
+        int oneIdx = -1;
+        for (int pass = 0; pass < 3 && oneIdx < 0; ++pass)
+        {
+            for (int i = 0; i < 10; ++i)
+            {
+                cPlayer* pP = (cPlayer*)g_pCharacters[i];
+                if (pP == NULL || pP->m_pTeam != pTeam || pP->m_eClassType == GOALIE)
+                {
+                    continue;
+                }
+                if ((pass == 0 && pP->m_pBall != NULL)
+                    || (pass == 1 && pP->GetGlobalPad() != NULL)
+                    || (pass == 2 && pP->IsCaptain()))
+                {
+                    oneIdx = i;
+                    break;
+                }
+            }
+        }
+
+        int next = 2;
+        for (int i = 0; i < 10; ++i)
+        {
+            cPlayer* pP = (cPlayer*)g_pCharacters[i];
+            if (pP == NULL || pP->m_pTeam != pTeam || pP->m_eClassType == GOALIE)
+            {
+                continue;
+            }
+            digitOf[i] = (i == oneIdx) ? 1 : (next <= 4 ? next++ : 4);
+        }
+
+        for (int i = 0; i < 10; ++i)
+        {
+            if (digitOf[i] == 0)
+            {
+                continue;
+            }
+            cPlayer* pP = (cPlayer*)g_pCharacters[i];
+            if (pP->m_pTeam != pTeam)
+            {
+                continue;
+            }
+
+            unsigned long tex = MixedNumberTexture(side, digitOf[i]);
+            if (tex == (unsigned long)-1)
+            {
+                continue;
+            }
+
+            nlVector3 v3Position = ReplayManager::Instance()->mRender->GetCharacter(i).mHeadPosition;
+            GameTweaks* pTweaks = g_pGame->GetGameTweaks();
+            v3Position.z += pTweaks->fIndicatorDistAboveHead;
+
+            nlVector3 v3Screen;
+            glViewProjectPoint((eGLView)7, v3Position, v3Screen);
+            if (v3Screen.z < -1.0f || v3Screen.z > 1.0f)
+            {
+                continue; // behind the camera
+            }
+
+            float fX = 0.5f * glGetOrthographicWidth() * (v3Screen.x + 1.0f);
+            float fY = 0.5f * glGetOrthographicHeight() * (v3Screen.y + 1.0f);
+            fY -= pTweaks->fIndicatorDistInPixels;
+
+            // The 1 is drawn a touch larger, so the ball carrier still stands out.
+            float fSize = (digitOf[i] == 1) ? s_fOverheadSize * 1.25f : s_fOverheadSize;
+            DrawIndicator((int)fX, (int)fY, fSize, fSize, fMaxAlpha, tex, 0.0f, 1);
+        }
+    }
+}
+
 void UpdateAndRenderIndicators(float dt)
 {
     UpdateAndRenderOffScreenIndicators(dt);
-    UpdateAndRenderPlayerIndicators(dt);
+    if (MixedNumbersOn())
+    {
+        MixedRenderTeamNumbers();
+    }
+    else
+    {
+        UpdateAndRenderPlayerIndicators(dt);
+    }
 
     if (s_bPulseGlowTexture)
     {
