@@ -149,6 +149,25 @@ int main() { std::jthread t([](std::stop_token) {}); }
     add_subdirectory(extern/aurora EXCLUDE_FROM_ALL)
 endif()
 
+
+# --- Lua, for the mod layer (src/platform/mods.cpp) -------------------------
+# Fetched at build time like Freetype above; built as one small static library.
+include(FetchContent)
+FetchContent_Declare(lua_src
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG v5.4.8
+    EXCLUDE_FROM_ALL
+)
+FetchContent_GetProperties(lua_src)
+if(NOT lua_src_POPULATED)
+    FetchContent_Populate(lua_src)
+endif()
+file(GLOB _lua_sources "${lua_src_SOURCE_DIR}/*.c")
+list(FILTER _lua_sources EXCLUDE REGEX "(onelua|lua|luac|ltests)\\.c$")
+add_library(strikers_lua STATIC ${_lua_sources})
+target_include_directories(strikers_lua PUBLIC "${lua_src_SOURCE_DIR}")
+set_target_properties(strikers_lua PROPERTIES C_STANDARD 99)
+
 add_library(port_flags INTERFACE)
 target_include_directories(port_flags INTERFACE ${PORT_INCLUDES})
 target_compile_definitions(port_flags INTERFACE ${PORT_DEFINES})
@@ -327,6 +346,10 @@ foreach(_t strikers_ode strikers_game strikers_platform strikers_sdk
     target_link_libraries(${_t} PRIVATE port_flags)
 endforeach()
 
+# The mod layer's script engine: headers for src/platform/mods.cpp, the library
+# itself into the executable below.
+target_link_libraries(strikers_platform PRIVATE strikers_lua)
+
 # strikers_scan is the cheap per-push check: every in-scope translation unit compiled, nothing
 # linked.
 add_custom_target(strikers_scan
@@ -343,7 +366,7 @@ add_executable(strikers
     $<TARGET_OBJECTS:strikers_operators>
     $<TARGET_OBJECTS:strikers_musyx>
 )
-target_link_libraries(strikers PRIVATE port_flags)
+target_link_libraries(strikers PRIVATE port_flags strikers_lua)
 
 # The executable's icon on Windows: the game's memory card icon, from assets/icon. The files are
 # checked in; the build only compiles the resource.
