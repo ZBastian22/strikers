@@ -32,38 +32,31 @@ static char gPickNames[2][3][20];
 static bool gPickedASidekick[2];
 
 // The pick numbers drawn over chosen faces. A grid cell is a small container
-// with one or more pictures inside (one per look). Each of those pictures
-// gets a private copy of its picture asset, re-pointed at a digit texture,
-// so nothing shared with other cells or screens is touched. Undone pick by
-// pick when B rewinds.
+// with one or more pictures inside (one per look). For each of those, a copy
+// of the picture is placed right after it in the draw order, pointing at the
+// number glyph, so the number draws on top of the face rather than replacing
+// it. Numbers fade in when placed and fade out when B rewinds, and every
+// copy is removed when the screen is left.
 extern unsigned long MixedPickerDigitTexture(int digit);
 static FETextureResource gPickerDigitRes[5];
 
-enum { kPickerMaxFaces = 8 };
+enum { kPickerMaxFaces = 8, kPickerMaxOverlays = 64 };
+static const float kPickerFadeTime = 0.2f;
+
+struct PickerOverlay
+{
+    TLInstance* mClone;     // the number picture, linked into the cell's draw ring
+    FEImage* mAsset;        // its private picture asset
+    float mAlpha;           // 0..1
+    bool mDying;            // fading out, then unlinked
+};
+static PickerOverlay gPickerOverlays[kPickerMaxOverlays];
+
 struct PickerFaceSwap
 {
     int mCount;
-    TLInstance* mImage[kPickerMaxFaces];
-    TLComponent* mOriginalAsset[kPickerMaxFaces];
-    FEImage* mClone[kPickerMaxFaces];
-    FELibObjectAttributes mSavedAttr[kPickerMaxFaces]; // scale/position before tuning
-    unsigned long mSavedFlags[kPickerMaxFaces];
+    int mOverlay[kPickerMaxFaces]; // indices into gPickerOverlays
 };
-
-// The number picture: the game's own controller number from fe/fe.glt when
-// it is resident, else the gold digit built in memory.
-static unsigned long PickerDigitTexture(int digit)
-{
-    static const char* const kNames[5] = {
-        NULL, "fe/controller_1_indicator", "fe/controller_2_indicator",
-        "fe/controller_3_indicator", "fe/controller_4_indicator" };
-    unsigned long tex = glGetTexture(kNames[digit]);
-    if (glTextureLoad(tex))
-    {
-        return tex;
-    }
-    return MixedPickerDigitTexture(digit);
-}
 static PickerFaceSwap gPickerSwap[2][4]; // [side][pick 0=captain,1..3=teammates]
 
 // Indexed by eTeamID: DAISY, DK, LUIGI, MARIO, PEACH, WALUIGI, WARIO, YOSHI, MYSTERY.
@@ -85,16 +78,99 @@ static const char* PickerSidekickCell(eSidekickID sk)
     }
 }
 
-// Collect every picture inside a cell, across all of its looks.
-static void PickerCollectImages(TLInstance* inst, PickerFaceSwap* out, int depth)
+// The number picture: the game's own controller number from fe/fe.glt when
+// it is resident, else the gold digit built in memory.
+static unsigned long PickerDigitTexture(int digit)
 {
-    if (inst == NULL || depth > 6 || out->mCount >= kPickerMaxFaces)
+    static const char* const kNames[5] = {
+        NULL, "fe/controller_1_indicator", "fe/controller_2_indicator",
+        "fe/controller_3_indicator", "fe/controller_4_indicator" };
+    unsigned long tex = glGetTexture(kNames[digit]);
+    if (glTextureLoad(tex))
+    {
+        return tex;
+    }
+    return MixedPickerDigitTexture(digit);
+}
+
+static void PickerSetAlpha(PickerOverlay* o)
+{
+    nlColour c = o->mClone->GetAssetColour();
+    int a = (int)(o->mAlpha * 255.0f);
+    c.c[3] = (unsigned char)(a < 0 ? 0 : (a > 255 ? 255 : a));
+    o->mClone->SetAssetColour(c);
+}
+
+static void PickerUnlinkOverlay(PickerOverlay* o)
+{
+    if (o->mClone == NULL)
+    {
+        return;
+    }
+    TLInstance* c = o->mClone;
+    if (c->m_prev != NULL) { c->m_prev->m_next = c->m_next; }
+    if (c->m_next != NULL) { c->m_next->m_prev = c->m_prev; }
+    nlFree(c);
+    nlFree(o->mAsset);
+    o->mClone = NULL;
+    o->mAsset = NULL;
+    o->mDying = false;
+}
+
+// Called every frame: run the fades, and drop overlays that faded out.
+static void PickerTickOverlays(float dt)
+{
+    for (int i = 0; i < kPickerMaxOverlays; ++i)
+    {
+        PickerOverlay* o = &gPickerOverlays[i];
+        if (o->mClone == NULL)
+        {
+            continue;
+        }
+        if (o->mDying)
+        {
+            o->mAlpha -= dt / kPickerFadeTime;
+            if (o->mAlpha <= 0.0f)
+            {
+                PickerUnlinkOverlay(o);
+                continue;
+            }
+        }
+        else if (o->mAlpha < 1.0f)
+        {
+            o->mAlpha += dt / kPickerFadeTime;
+            if (o->mAlpha > 1.0f) { o->mAlpha = 1.0f; }
+        }
+        PickerSetAlpha(o);
+    }
+}
+
+// Leaving the screen: every copy goes at once, so nothing outlives the art.
+static void PickerDestroyOverlays()
+{
+    for (int i = 0; i < kPickerMaxOverlays; ++i)
+    {
+        PickerUnlinkOverlay(&gPickerOverlays[i]);
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            gPickerSwap[i][k].mCount = 0;
+        }
+    }
+}
+
+// Collect every picture inside a cell, across all of its looks.
+static void PickerCollectImages(TLInstance* inst, TLInstance** out, int* count, int depth)
+{
+    if (inst == NULL || depth > 6 || *count >= kPickerMaxFaces)
     {
         return;
     }
     if (inst->m_type == TLAT_IMAGE)
     {
-        out->mImage[out->mCount++] = inst;
+        out[(*count)++] = inst;
     }
     else if (inst->m_type == TLAT_COMPONENT && inst->m_component != NULL && inst->m_component->pChildren != NULL)
     {
@@ -108,7 +184,7 @@ static void PickerCollectImages(TLInstance* inst, PickerFaceSwap* out, int depth
                 TLInstance* ic = ihead;
                 for (int g2 = 0; g2 < 64; ++g2)
                 {
-                    PickerCollectImages(ic, out, depth + 1);
+                    PickerCollectImages(ic, out, count, depth + 1);
                     ic = ic->m_next;
                     if (ic == ihead || ic == NULL) break;
                 }
@@ -123,7 +199,7 @@ static void PickerCollectImages(TLInstance* inst, PickerFaceSwap* out, int depth
         TLInstance* c = head;
         for (int guard = 0; guard < 64; ++guard)
         {
-            PickerCollectImages(c, out, depth + 1);
+            PickerCollectImages(c, out, count, depth + 1);
             c = c->m_next;
             if (c == head || c == NULL) break;
         }
@@ -145,8 +221,10 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
     {
         return;
     }
+    gPickerDigitRes[pickIdx + 1].m_glTextureHandle = tex;
+    gPickerDigitRes[pickIdx + 1].m_bValid = 1;
 
-    // Tuning from the mods folder, so size and orientation can be dialled in
+    // Tuning from the mods folder, so size and position can be dialled in
     // without a rebuild: picker_number_scale (percent), picker_number_flip,
     // picker_number_dx / picker_number_dy (in the menu's own units).
     Config& cfg = Config::Global();
@@ -156,8 +234,6 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
     bool flip = (side == 1) != GetConfigBool(cfg, "picker_number_flip", false);
     float dx = (float)GetConfigInt(cfg, "picker_number_dx", 0);
     float dy = (float)GetConfigInt(cfg, "picker_number_dy", 0);
-    gPickerDigitRes[pickIdx + 1].m_glTextureHandle = tex;
-    gPickerDigitRes[pickIdx + 1].m_bValid = 1;
 
     TLComponentInstance* grid = onCaptainGrid
         ? p->mCaptainGridComponents[side]->mParentComponent
@@ -170,24 +246,52 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
         return;
     }
 
-    PickerCollectImages(cell, swap, 0);
-    for (int i = 0; i < swap->mCount; ++i)
-    {
-        TLInstance* img = swap->mImage[i];
-        FEImage* clone = (FEImage*)nlMalloc(sizeof(FEImage), 8, false);
-        memcpy(clone, img->m_component, sizeof(FEImage));
-        clone->m_pFeTextureResource = &gPickerDigitRes[pickIdx + 1];
-        swap->mOriginalAsset[i] = img->m_component;
-        swap->mClone[i] = clone;
-        img->m_component = (TLComponent*)clone;
+    TLInstance* images[kPickerMaxFaces];
+    int nImages = 0;
+    PickerCollectImages(cell, images, &nImages, 0);
 
-        // Size, mirror and nudge the number on this picture.
-        swap->mSavedAttr[i] = img->m_overloadedAttributes;
-        swap->mSavedFlags[i] = img->m_overloadFlags;
+    for (int i = 0; i < nImages; ++i)
+    {
+        int slot = -1;
+        for (int k = 0; k < kPickerMaxOverlays; ++k)
+        {
+            if (gPickerOverlays[k].mClone == NULL) { slot = k; break; }
+        }
+        if (slot < 0)
+        {
+            break;
+        }
+        TLInstance* img = images[i];
+
+        // A copy of the face picture, pointing at the number instead.
+        FEImage* asset = (FEImage*)nlMalloc(sizeof(FEImage), 8, false);
+        memcpy(asset, img->m_component, sizeof(FEImage));
+        asset->m_pFeTextureResource = &gPickerDigitRes[pickIdx + 1];
+
+        TLImageInstance* clone = (TLImageInstance*)nlMalloc(sizeof(TLImageInstance), 8, false);
+        memcpy(clone, img, sizeof(TLImageInstance));
+        clone->m_component = (TLComponent*)asset;
+        clone->pChildren = NULL;
+        clone->m_hash = nlStringLowerHash("picker_number");
+        nlSNPrintf(clone->m_szName, 32, "picker_number");
+
+        // Same place as the face, then the tuning, then drawn right after it.
         feVector3& sc = img->GetScale();
         feVector3& ps = img->GetPosition();
-        img->SetAssetScale(sc.f.x * scale * (flip ? -1.0f : 1.0f), sc.f.y * scale, sc.f.z);
-        img->SetAssetPosition(ps.f.x + dx, ps.f.y + dy, ps.f.z);
+        clone->SetAssetScale(sc.f.x * scale * (flip ? -1.0f : 1.0f), sc.f.y * scale, sc.f.z);
+        clone->SetAssetPosition(ps.f.x + dx, ps.f.y + dy, ps.f.z);
+        clone->m_next = img->m_next;
+        clone->m_prev = img;
+        if (img->m_next != NULL) { img->m_next->m_prev = clone; }
+        img->m_next = clone;
+
+        PickerOverlay* o = &gPickerOverlays[slot];
+        o->mClone = clone;
+        o->mAsset = asset;
+        o->mAlpha = 0.0f;
+        o->mDying = false;
+        PickerSetAlpha(o);
+        swap->mOverlay[swap->mCount++] = slot;
     }
     OSReport("[mixed teams] picker: %d picture(s) in %s numbered %d (%s, scale %d%%%s)\n",
              swap->mCount, cellName, pickIdx + 1,
@@ -195,17 +299,56 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
              (int)(scale * 100.0f), flip ? ", flipped" : "");
 }
 
+// Start the number fading out; it is unlinked once invisible.
 static void PickerUnnumberFace(int side, int pickIdx)
 {
     PickerFaceSwap* swap = &gPickerSwap[side][pickIdx];
     for (int i = 0; i < swap->mCount; ++i)
     {
-        swap->mImage[i]->m_component = swap->mOriginalAsset[i];
-        swap->mImage[i]->m_overloadedAttributes = swap->mSavedAttr[i];
-        swap->mImage[i]->m_overloadFlags = swap->mSavedFlags[i];
-        nlFree(swap->mClone[i]);
+        gPickerOverlays[swap->mOverlay[i]].mDying = true;
     }
     swap->mCount = 0;
+}
+
+// B while locked in: back to the captain grid with the last teammate removed,
+// the same way the game returns from a ready mystery captain.
+static void MixedPickerReadyToCaptainGrid(IChooseCaptain* p, int side)
+{
+    IChooseCaptain::ComponentState& st = p->mComponentState[side];
+    st.mCurrentPhase = PHASE_CHOOSING_CAPTAIN;
+
+    ICaptainGridComponent* grid = p->mCaptainGridComponents[side];
+    grid->mParentComponent->SetActiveSlide("SELECT");
+    grid->mParentComponent->Update(0.0f);
+    grid->RebuildInstanceTable();
+    grid->mMapMenu->UpdateAllItems();
+    grid->RebindHighliteComponent("HIGHLIGHT");
+    grid->mHighliteComponent->m_bVisible = true;
+    grid->mParentComponent->m_bVisible = true;
+    grid->MoveHighlightToTarget((eTeamID)p->mHomeAwayTeam[side]);
+    p->mCaptainComponents[side]->m_bVisible = false;
+    p->mSidekickComponents[side]->m_bVisible = false;
+    p->mSidekickMiniHeadComponents[side]->m_bVisible = false;
+
+    ICaptainGridComponent* other = p->mCaptainGridComponents[side ^ 1];
+    other->RebuildInstanceTable();
+    other->SetAllItemsActive();
+    grid->RebuildInstanceTable();
+    grid->SetAllItemsActive();
+    if (p->mComponentState[side ^ 1].mCurrentPhase > PHASE_CHOOSING_CAPTAIN)
+    {
+        grid->mMapMenu->SetItemActive(other->mMapMenu->GetSelectedItem(), false);
+    }
+    // Our own captain stays greyed on their grid, as when he was picked.
+    other->mMapMenu->SetItemActive(grid->mMapMenu->GetSelectedItem(), false);
+
+    IChooseCaptain::NameComponent* nc = &p->mNameComponents[side];
+    nc->mComponent->SetActiveSlide("Slide1");
+    nc->mComponent->Update(0.0f);
+    nc->SetCaptainName(GetLOCCharacterName((eTeamID)p->mHomeAwayTeam[side], false, false));
+    nc->SetCaptainLogo(GetTeamName((eTeamID)p->mHomeAwayTeam[side]));
+
+    FEAudio::PlayAnimAudioEvent("sfx_back_no_screen_change", false);
 }
 
 // True when this side already has that character (captain included).
@@ -238,11 +381,16 @@ static void MixedPickerReset()
     gPickerOn = GetConfigBool(cfg, "mixed_teams", false) && GetConfigBool(cfg, "mixed_picker", false);
     gPickCount[0] = gPickCount[1] = -1;
     gPickedASidekick[0] = gPickedASidekick[1] = false;
+    for (int i = 0; i < kPickerMaxOverlays; ++i)
+    {
+        gPickerOverlays[i].mClone = NULL; // fresh scene: any old copy went with the old art
+        gPickerOverlays[i].mAsset = NULL;
+    }
     for (int i = 0; i < 2; ++i)
     {
         for (int k = 0; k < 4; ++k)
         {
-            gPickerSwap[i][k].mCount = 0; // fresh scene, fresh pictures
+            gPickerSwap[i][k].mCount = 0;
         }
     }
     if (gPickerOn)
@@ -452,8 +600,9 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
 
     if (ph == PHASE_READY && count == 3)
     {
-        p->mComponentState[side].GotoPreviousPhase(); // brings the sidekick grid back
+        MixedPickerReadyToCaptainGrid(p, side);
         count = 2;
+        PickerUnnumberFace(side, 3);
         return true;
     }
 
@@ -552,6 +701,8 @@ IChooseCaptain::IChooseCaptain()
  */
 IChooseCaptain::~IChooseCaptain()
 {
+    PickerDestroyOverlays(); // MOD (mixed teams): no number copy outlives this screen
+
     // PORT: was a walk over `this` with hardcoded 0xC and 4 byte strides, three pointers and one pointer.
     for (int i = 0; i < 2; i++)
     {
@@ -640,6 +791,8 @@ void IChooseCaptain::UpdateSound(float dt)
  */
 UpdateResult IChooseCaptain::Update(float dt)
 {
+    PickerTickOverlays(dt); // MOD (mixed teams): number fades
+
     CheckForDisconnectedHumanPlayers();
     FindAliveHumanPlayers();
 
@@ -770,9 +923,9 @@ UpdateResult IChooseCaptain::Update(float dt)
                 }
             }
         }
-        else if (g_pFEInput->JustPressed(inputpad, 0x800, false, &inputpad))
+        else if (g_pFEInput->JustPressed(inputpad, 0x400, false, &inputpad))
         {
-            // MOD (mixed teams): Y flips between the two character grids.
+            // MOD (mixed teams): X flips between the two character grids.
             MixedPickerToggle(this, GetSide(inputpad));
         }
         else
