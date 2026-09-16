@@ -46,7 +46,24 @@ struct PickerFaceSwap
     TLInstance* mImage[kPickerMaxFaces];
     TLComponent* mOriginalAsset[kPickerMaxFaces];
     FEImage* mClone[kPickerMaxFaces];
+    FELibObjectAttributes mSavedAttr[kPickerMaxFaces]; // scale/position before tuning
+    unsigned long mSavedFlags[kPickerMaxFaces];
 };
+
+// The number picture: the game's own controller number from fe/fe.glt when
+// it is resident, else the gold digit built in memory.
+static unsigned long PickerDigitTexture(int digit)
+{
+    static const char* const kNames[5] = {
+        NULL, "fe/controller_1_indicator", "fe/controller_2_indicator",
+        "fe/controller_3_indicator", "fe/controller_4_indicator" };
+    unsigned long tex = glGetTexture(kNames[digit]);
+    if (glTextureLoad(tex))
+    {
+        return tex;
+    }
+    return MixedPickerDigitTexture(digit);
+}
 static PickerFaceSwap gPickerSwap[2][4]; // [side][pick 0=captain,1..3=teammates]
 
 // Indexed by eTeamID: DAISY, DK, LUIGI, MARIO, PEACH, WALUIGI, WARIO, YOSHI, MYSTERY.
@@ -123,11 +140,22 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
         return;
     }
 
-    unsigned long tex = MixedPickerDigitTexture(pickIdx + 1);
+    unsigned long tex = PickerDigitTexture(pickIdx + 1);
     if (tex == (unsigned long)-1)
     {
         return;
     }
+
+    // Tuning from the mods folder, so size and orientation can be dialled in
+    // without a rebuild: picker_number_scale (percent), picker_number_flip,
+    // picker_number_dx / picker_number_dy (in the menu's own units).
+    Config& cfg = Config::Global();
+    float scale = GetConfigInt(cfg, "picker_number_scale", 100) / 100.0f;
+    // The opponent's grid is a mirror image of yours, so the number is
+    // mirrored back there. picker_number_flip swaps that if the art disagrees.
+    bool flip = (side == 1) != GetConfigBool(cfg, "picker_number_flip", false);
+    float dx = (float)GetConfigInt(cfg, "picker_number_dx", 0);
+    float dy = (float)GetConfigInt(cfg, "picker_number_dy", 0);
     gPickerDigitRes[pickIdx + 1].m_glTextureHandle = tex;
     gPickerDigitRes[pickIdx + 1].m_bValid = 1;
 
@@ -152,8 +180,19 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
         swap->mOriginalAsset[i] = img->m_component;
         swap->mClone[i] = clone;
         img->m_component = (TLComponent*)clone;
+
+        // Size, mirror and nudge the number on this picture.
+        swap->mSavedAttr[i] = img->m_overloadedAttributes;
+        swap->mSavedFlags[i] = img->m_overloadFlags;
+        feVector3& sc = img->GetScale();
+        feVector3& ps = img->GetPosition();
+        img->SetAssetScale(sc.f.x * scale * (flip ? -1.0f : 1.0f), sc.f.y * scale, sc.f.z);
+        img->SetAssetPosition(ps.f.x + dx, ps.f.y + dy, ps.f.z);
     }
-    OSReport("[mixed teams] picker: %d picture(s) in %s numbered %d\n", swap->mCount, cellName, pickIdx + 1);
+    OSReport("[mixed teams] picker: %d picture(s) in %s numbered %d (%s, scale %d%%%s)\n",
+             swap->mCount, cellName, pickIdx + 1,
+             (tex == MixedPickerDigitTexture(pickIdx + 1)) ? "built-in digit" : "game glyph",
+             (int)(scale * 100.0f), flip ? ", flipped" : "");
 }
 
 static void PickerUnnumberFace(int side, int pickIdx)
@@ -162,6 +201,8 @@ static void PickerUnnumberFace(int side, int pickIdx)
     for (int i = 0; i < swap->mCount; ++i)
     {
         swap->mImage[i]->m_component = swap->mOriginalAsset[i];
+        swap->mImage[i]->m_overloadedAttributes = swap->mSavedAttr[i];
+        swap->mImage[i]->m_overloadFlags = swap->mSavedFlags[i];
         nlFree(swap->mClone[i]);
     }
     swap->mCount = 0;
