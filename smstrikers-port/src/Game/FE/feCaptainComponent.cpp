@@ -3,10 +3,310 @@
 #include "Game/FE/feFinder.h"
 #include "Game/FE/fePresentation.h"
 #include "Game/FE/tlSlide.h"
+#include "NL/nlConfig.h"
+#include "dolphin/os.h"
 
 extern bool g_e3_Build;
 
 static const char* const SLIDE_IN = "in";
+
+// ===========================================================================
+// MOD (mixed teams): the in-menu team picker.
+//
+// With `mixed_picker` on, the captain screen asks four times instead of once:
+// first your captain, then each of your three teammates, all on the captain
+// grid. Y flips the view to the classic sidekick grid and back, and confirm
+// takes whichever face is highlighted, so all twelve characters are reachable.
+// B un-picks the last choice. Once a side has four, it locks in, and the
+// picks land in the same team1_slot2..team2_slot4 settings the pitch reads.
+// ===========================================================================
+
+static bool gPickerOn = false;
+static int gPickCount[2];          // -1 = captain not chosen yet, 0..3 = teammates picked
+static char gPickNames[2][3][20];
+static bool gPickedASidekick[2];
+
+static bool MixedPickerOn()
+{
+    return gPickerOn;
+}
+
+// Fresh state every time the screen is entered. Old slot picks are cleared so
+// a previous match (or a lineup.lua) never leaks into a side the picker owns.
+static void MixedPickerReset()
+{
+    Config& cfg = Config::Global();
+    gPickerOn = GetConfigBool(cfg, "mixed_teams", false) && GetConfigBool(cfg, "mixed_picker", false);
+    gPickCount[0] = gPickCount[1] = -1;
+    gPickedASidekick[0] = gPickedASidekick[1] = false;
+    if (gPickerOn)
+    {
+        cfg.Set("team1_slot2", ""); cfg.Set("team1_slot3", ""); cfg.Set("team1_slot4", "");
+        cfg.Set("team2_slot2", ""); cfg.Set("team2_slot3", ""); cfg.Set("team2_slot4", "");
+    }
+}
+
+// The captain grid sliding out, exactly as a vanilla accept does it.
+static void MixedPickerCaptainGridOut(IChooseCaptain* p, int side)
+{
+    ICaptainGridComponent* cg = p->mCaptainGridComponents[side];
+    cg->mParentComponent->SetActiveSlide("OUT");
+    cg->mParentComponent->Update(0.0f);
+    cg->RebuildInstanceTable();
+    cg->mMapMenu->UpdateAllItems();
+    cg->RebindHighliteComponent("HIGHLIGHT");
+    cg->mHighliteComponent->m_bVisible = false;
+    FEAudio::PlayAnimAudioEvent((side == 0) ? "sfx_character_group_left_exit" : "sfx_character_group_right_exit", false);
+}
+
+// The sidekick grid sliding in, exactly as the vanilla captain accept does it.
+static void MixedPickerSidekickGridIn(IChooseCaptain* p, int side)
+{
+    ISidekickGridComponent* sg = p->mSidekickGridComponents[side];
+    sg->mParentComponent->SetActiveSlide("IN");
+    sg->mParentComponent->Update(0.0f);
+    sg->RebuildInstanceTable();
+    sg->mMapMenu->UpdateAllItems();
+    sg->RebindHighliteComponent("HIGHLIGHT");
+    sg->mHighliteComponent->m_bVisible = false;
+    sg->mHighliteVisibilityAtAnimEnd = true;
+    sg->SetVisibleInstanceTable(true);
+    sg->mParentComponent->m_bVisible = true;
+    FEAudio::PlayAnimAudioEvent((side == 0) ? "sfx_character_group_left_enter" : "sfx_character_group_right_enter", false);
+}
+
+// The sidekick grid sliding out, as the vanilla sidekick accept does it.
+static void MixedPickerSidekickGridOut(IChooseCaptain* p, int side)
+{
+    ISidekickGridComponent* sg = p->mSidekickGridComponents[side];
+    sg->mParentComponent->SetActiveSlide("OUT");
+    sg->mParentComponent->Update(0.0f);
+    sg->RebuildInstanceTable();
+    sg->mMapMenu->UpdateAllItems();
+    sg->RebindHighliteComponent("HIGHLIGHT");
+    sg->mHighliteComponent->m_bVisible = false;
+    FEAudio::PlayAnimAudioEvent((side == 0) ? "sfx_character_group_left_exit" : "sfx_character_group_right_exit", false);
+}
+
+// A side has all four picks: write them where the pitch reads them, bring in
+// the big captain portrait, and stand ready.
+static void MixedPickerFinish(IChooseCaptain* p, int side)
+{
+    if (p->mComponentState[side].mCurrentPhase == PHASE_CHOOSING_SIDEKICK)
+    {
+        MixedPickerSidekickGridOut(p, side);
+    }
+    else
+    {
+        MixedPickerCaptainGridOut(p, side);
+    }
+
+    Config& cfg = Config::Global();
+    char szKey[16];
+    for (int k = 0; k < 3; ++k)
+    {
+        nlSNPrintf(szKey, 16, "team%d_slot%d", side + 1, k + 2);
+        cfg.Set(szKey, (const char*)gPickNames[side][k]);
+        OSReport("[mixed teams] picker: %s = %s\n", szKey, gPickNames[side][k]);
+    }
+
+    int teamID = p->mHomeAwayTeam[side];
+    char fn0[0x80], fn1[0x80], fn2[0x80];
+    CaptainSidekickFilename::Build(CaptainSidekickFilename::TYPE_CAPTAIN, fn0, 0x80, teamID, side);
+    CaptainSidekickFilename::Build(CaptainSidekickFilename::TYPE_CAPTAIN_OUTLINE, fn1, 0x80, teamID, side);
+    CaptainSidekickFilename::Build(CaptainSidekickFilename::TYPE_CAPTAIN_FLASH, fn2, 0x80, teamID, side);
+    p->mAsyncImage[side][0]->QueueLoad(fn0, false);
+    p->mAsyncImage[side][1]->QueueLoad(fn1, false);
+    p->mAsyncImage[side][2]->QueueLoad(fn2, false);
+    p->mDidSwapCaptains[side] = false;
+
+    // The little sidekick head next to the portrait: the first sidekick picked,
+    // or hidden when the team is captains only.
+    p->StartSidekickMiniHead(side, gPickedASidekick[side] ? (eSidekickID)p->mHomeAwaySidekicks[side] : SK_MYSTERY);
+
+    p->mComponentState[side].mCurrentPhase = PHASE_READY;
+    FEAudio::PlayAnimAudioEvent("sfx_accept_no_screen_change", false);
+}
+
+// Confirm, with the picker on. Returns true when handled; false hands the
+// press back to the vanilla flow (mystery captains, ready sides).
+static bool MixedPickerConfirm(IChooseCaptain* p, int side)
+{
+    if (!MixedPickerOn() || side < 0)
+    {
+        return false;
+    }
+
+    IChooseCaptain::ComponentState::Phase ph = p->mComponentState[side].mCurrentPhase;
+    if (ph != PHASE_CHOOSING_CAPTAIN && ph != PHASE_CHOOSING_SIDEKICK)
+    {
+        return false;
+    }
+
+    int& count = gPickCount[side];
+
+    // First confirm: the captain himself.
+    if (count < 0)
+    {
+        if (ph != PHASE_CHOOSING_CAPTAIN)
+        {
+            return false;
+        }
+        ICaptainGridComponent* cg = p->mCaptainGridComponents[side];
+        eTeamID sel = cg->GetSelectedItem();
+        if (sel == TEAM_MYSTERY)
+        {
+            return false; // vanilla knows what to do with the question mark
+        }
+        if (!cg->mMapMenu->IsSelectedItemActive())
+        {
+            FEAudio::PlayAnimAudioEvent("sfx_deny", false);
+            return true;
+        }
+
+        p->mHomeAwayTeam[side] = sel;
+        p->mHomeAwaySidekicks[side] = SK_TOAD; // placeholder until a sidekick is picked
+        p->mCaptainGridComponents[side ^ 1]->mMapMenu->SetItemActive(cg->mMapMenu->GetSelectedItem(), false);
+
+        count = 0;
+        FEAudio::PlayAnimAudioEvent("sfx_accept_no_screen_change", false);
+        p->mLastCaptainSelectSoundStrPlayed[side] = (char*)FECharacterSound::PlayCaptainName(sel);
+        OSReport("[mixed teams] picker: side %d captain = %s\n", side, GetTeamName(sel));
+        return true;
+    }
+
+    // Teammates two to four, from whichever grid is showing.
+    const char* nm = NULL;
+    if (ph == PHASE_CHOOSING_CAPTAIN)
+    {
+        eTeamID sel = p->mCaptainGridComponents[side]->GetSelectedItem();
+        if (sel == TEAM_MYSTERY)
+        {
+            FEAudio::PlayAnimAudioEvent("sfx_deny", false);
+            return true;
+        }
+        nm = GetTeamName(sel);
+        FECharacterSound::PlayCaptainName(sel);
+    }
+    else
+    {
+        eSidekickID sk = p->mSidekickGridComponents[side]->GetSelectedItem();
+        nm = GetSidekickName(sk);
+        FECharacterSound::PlaySidekickName(sk);
+        if (!gPickedASidekick[side])
+        {
+            gPickedASidekick[side] = true;
+            p->mHomeAwaySidekicks[side] = sk;
+        }
+    }
+
+    nlSNPrintf(gPickNames[side][count], 20, "%s", nm);
+    count++;
+    FEAudio::PlayAnimAudioEvent("sfx_accept_no_screen_change", false);
+
+    if (count == 3)
+    {
+        MixedPickerFinish(p, side);
+    }
+    return true;
+}
+
+// B, with the picker on: un-pick the last choice. Returns true when handled.
+static bool MixedPickerBack(IChooseCaptain* p, int side)
+{
+    if (!MixedPickerOn() || side < 0)
+    {
+        return false;
+    }
+
+    IChooseCaptain::ComponentState::Phase ph = p->mComponentState[side].mCurrentPhase;
+    int& count = gPickCount[side];
+
+    if (ph == PHASE_READY && count == 3)
+    {
+        p->mComponentState[side].GotoPreviousPhase(); // brings the sidekick grid back
+        count = 2;
+        return true;
+    }
+
+    if (ph != PHASE_CHOOSING_CAPTAIN && ph != PHASE_CHOOSING_SIDEKICK)
+    {
+        return false;
+    }
+
+    if (count > 0)
+    {
+        count--;
+        if (gPickedASidekick[side])
+        {
+            // Recount: does any remaining pick still name a sidekick?
+            gPickedASidekick[side] = false;
+            for (int k = 0; k < count; ++k)
+            {
+                eSidekickID sk = ConvertToSidekickID(gPickNames[side][k]);
+                if (sk != SK_INVALID)
+                {
+                    gPickedASidekick[side] = true;
+                    p->mHomeAwaySidekicks[side] = sk;
+                    break;
+                }
+            }
+            if (!gPickedASidekick[side])
+            {
+                p->mHomeAwaySidekicks[side] = SK_TOAD;
+            }
+        }
+        FEAudio::PlayAnimAudioEvent("sfx_back_no_screen_change", false);
+        return true;
+    }
+
+    if (count == 0)
+    {
+        // Un-choose the captain himself.
+        count = -1;
+        p->mCaptainGridComponents[side ^ 1]->mMapMenu->SetItemActive(
+            p->mCaptainGridComponents[side]->mMapMenu->GetSelectedItem(), true);
+        if (ph == PHASE_CHOOSING_SIDEKICK)
+        {
+            p->mComponentState[side].GotoPreviousPhase(); // back to the captain grid
+        }
+        else
+        {
+            FEAudio::PlayAnimAudioEvent("sfx_back_no_screen_change", false);
+        }
+        return true;
+    }
+
+    return false; // captain not chosen: vanilla back (leave the screen)
+}
+
+// Y, with the picker on: flip between the captain grid and the sidekick grid.
+static void MixedPickerToggle(IChooseCaptain* p, int side)
+{
+    if (!MixedPickerOn() || side < 0 || gPickCount[side] < 0)
+    {
+        return;
+    }
+
+    IChooseCaptain::ComponentState::Phase ph = p->mComponentState[side].mCurrentPhase;
+    if (ph == PHASE_CHOOSING_CAPTAIN)
+    {
+        MixedPickerCaptainGridOut(p, side);
+        MixedPickerSidekickGridIn(p, side);
+        p->mComponentState[side].mCurrentPhase = PHASE_CHOOSING_SIDEKICK;
+
+        IChooseCaptain::NameComponent* nc = &p->mNameComponents[side];
+        nc->mComponent->SetActiveSlide("Slide2");
+        nc->mComponent->Update(0.0f);
+        nc->SetCaptainName(GetLOCCharacterName((eTeamID)p->mHomeAwayTeam[side], false, false));
+        nc->SetCaptainLogo(GetTeamName((eTeamID)p->mHomeAwayTeam[side]));
+        nc->SetSidekickName(GetLOCSidekickName(p->mSidekickGridComponents[side]->GetSelectedItem()));
+    }
+    else if (ph == PHASE_CHOOSING_SIDEKICK)
+    {
+        p->mComponentState[side].GotoPreviousPhase(); // vanilla restores the captain grid
+    }
+}
 
 /**
  * Offset/Address/Size: 0x1DF4 | 0x800BF790 | size: 0x14
@@ -132,6 +432,12 @@ UpdateResult IChooseCaptain::Update(float dt)
         {
             goback = 0;
 
+            // MOD (mixed teams): with the picker on, B un-picks instead.
+            if (MixedPickerBack(this, side))
+            {
+                continue;
+            }
+
             switch (mComponentState[side].mCurrentPhase)
             {
             case PHASE_READY:
@@ -221,13 +527,23 @@ UpdateResult IChooseCaptain::Update(float dt)
             {
                 int side2 = GetSide(inputpad);
 
-                mComponentState[side2].GotoNextPhase();
+                // MOD (mixed teams): with the picker on, confirm records one of
+                // four picks; the vanilla step only runs when it declines.
+                if (!MixedPickerConfirm(this, side2))
+                {
+                    mComponentState[side2].GotoNextPhase();
+                }
 
                 if (mIsSinglePlayerInput && mComponentState[0].mCurrentPhase == PHASE_READY && mComponentState[1].mCurrentPhase == PHASE_IDLE)
                 {
                     mComponentState[1].SetCurrentPhase(PHASE_CHOOSING_CAPTAIN);
                 }
             }
+        }
+        else if (g_pFEInput->JustPressed(inputpad, 0x800, false, &inputpad))
+        {
+            // MOD (mixed teams): Y flips between the two character grids.
+            MixedPickerToggle(this, GetSide(inputpad));
         }
         else
         {
@@ -462,6 +778,9 @@ void IChooseCaptain::SceneCreated(FEPresentation* presentation)
 
     mNameComponents[1].mCaptainObjName = "CAPTAIN_NAME";
     mNameComponents[1].mSidekickObjName = "SIDEKICK_NAME";
+
+    // MOD (mixed teams): fresh picker state every time this screen appears.
+    MixedPickerReset();
 
     mComponentState[0].SetCurrentPhase(PHASE_CHOOSING_CAPTAIN);
     mComponentState[1].SetCurrentPhase(PHASE_IDLE);
