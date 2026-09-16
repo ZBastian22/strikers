@@ -798,6 +798,17 @@ void DrawableCharacter::SendToGl(const cCharacter& character) const
             gl_ModifyAddMapping(GLMod_DiffuseTex, character.m_uNormalTextureID, character.m_uSwapTextureID);
             isMapped = 1;
         }
+        // MOD (mixed teams): a recoloured captain may have more than one picture swapped.
+        {
+            extern int MixedKitExtraMappings(const cCharacter* pChar, unsigned long* pWas, unsigned long* pWillBe);
+            unsigned long was[4], willBe[4];
+            int extra = MixedKitExtraMappings(&character, was, willBe);
+            for (int e = 0; e < extra; ++e)
+            {
+                gl_ModifyAddMapping(GLMod_DiffuseTex, was[e], willBe[e]);
+                isMapped++;
+            }
+        }
 
         if (fxtex == nullptr)
         {
@@ -806,9 +817,10 @@ void DrawableCharacter::SendToGl(const cCharacter& character) const
 
         glViewAttachModel(GLV_Characters, pModel);
 
-        if (isMapped != 0)
+        while (isMapped != 0)
         {
             gl_ModifyClearLastMapping();
+            isMapped--;
         }
 
         // MOD (mixed teams): the outline shell. The same posed body again, inflated a
