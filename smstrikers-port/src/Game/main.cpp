@@ -178,6 +178,8 @@ static void PreInitFS()
 /**
  * Offset/Address/Size: 0x354 | 0x80173864 | size: 0x1858
  */
+extern "C" void PortModsInit(void);
+
 static void Initialize()
 {
     nlRegHandleDVDMessageCB(Function<void(int)>(DisplayDVDMessageSebring));
@@ -244,6 +246,10 @@ static void Initialize()
                 Config::Global().Set(kTeamVars[i][1], v);
         }
     }
+
+    // MOD (mod layer): run mods/*.lua last, so a script's settings win over the
+    // ini file and the environment variables.
+    PortModsInit();
 
     GetConfigBool(Config::Global(), "DiskAccess", false);
     if (GetConfigBool(Config::Global(), "e3_build", false))
