@@ -8,8 +8,83 @@
 #include "Game/GameInfo.h"
 #include "Game/GameSceneManager.h"
 #include "NL/nlMemory.h"
+#include "NL/nlConfig.h"
+#include "Game/FE/feFinder.h"
+#include "Game/FE/tlTextInstance.h"
+#include "Game/FE/tlSlide.h"
+#include "dolphin/os.h"
 
 extern FEInput* g_pFEInput;
+
+// ---------------------------------------------------------------------------
+// MOD (mixed teams): the Super Strikes rule, as a row in this options menu.
+//
+// The menu's six rows are baked into the artwork, so instead of a seventh row
+// the rule lives on the SUPER STRIKES row itself: with mixed teams on, X
+// flips who may throw one, and the row's label spells out the current rule
+// in the game's own font. The row's ON/OFF list keeps its vanilla meaning.
+// ---------------------------------------------------------------------------
+
+static void MixedRelabelSuperRow(FEPresentation* pres)
+{
+    Config& cfg = Config::Global();
+    if (!GetConfigBool(cfg, "mixed_teams", false))
+    {
+        return; // vanilla menu stays word-for-word vanilla
+    }
+
+    static const unsigned short kAll[] = {
+        'S','U','P','E','R',':',' ','E','V','E','R','Y','O','N','E',' ','(','X',')',0};
+    static const unsigned short kCaptain[] = {
+        'S','U','P','E','R',':',' ','C','A','P','T','A','I','N','S',' ','(','X',')',0};
+    const unsigned short* label = GetConfigBool(cfg, "super_all", false) ? kAll : kCaptain;
+
+    TLComponentInstance* row = FEFinder<TLComponentInstance, 4>::Find<TLSlide>(
+        pres->GetActiveSlide(),
+        InlineHasher(nlStringLowerHash("Layer")),
+        InlineHasher(nlStringLowerHash("MENU ITEM4")));
+    if (row == NULL)
+    {
+        return;
+    }
+    TLComponentInstance* high = FEFinder<TLComponentInstance, 4>::Find<TLSlide>(
+        row->GetActiveSlide(),
+        InlineHasher(nlStringLowerHash("high")));
+    if (high == NULL)
+    {
+        return;
+    }
+
+    // The label text exists once per state slide ("in" open, "out" closed),
+    // so both copies are rewritten, and the slide that was showing stays.
+    TLSlide* pOriginal = high->GetActiveSlide();
+    static const char* const kStates[2] = { "in", "out" };
+    for (int i = 0; i < 2; ++i)
+    {
+        high->SetActiveSlide(kStates[i]);
+        if (high->GetActiveSlide() == NULL)
+        {
+            continue;
+        }
+        TLTextInstance* text = FEFinder<TLTextInstance, 3>::Find<TLSlide>(
+            high->GetActiveSlide(),
+            InlineHasher(nlStringLowerHash("Layer")),
+            InlineHasher(nlStringLowerHash("CENTER")));
+        if (text != NULL)
+        {
+            text->SetString(label);
+        }
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+        high->SetActiveSlide(kStates[i]);
+        if (high->GetActiveSlide() == pOriginal)
+        {
+            break;
+        }
+    }
+    row->Update(0.0f);
+}
 
 /**
  * Offset/Address/Size: 0x278 | 0x8010D0BC | size: 0x74
@@ -58,6 +133,9 @@ void QuickGameplayOptionsScene::SceneCreated()
     OptionsGameplayMenuV2* pMem = (OptionsGameplayMenuV2*)nlMalloc(sizeof(OptionsGameplayMenuV2), 8, false);
     pMem = new (pMem) OptionsGameplayMenuV2(pPresentation, ButtonComponent::BS_B_ONLY, GameInfoManager::GetInstance()->mCurGameGameplayOptions, maxSkillLevel);
     m_pOptionsMenu = pMem;
+
+    // MOD (mixed teams): show the current Super Strikes rule on its row.
+    MixedRelabelSuperRow(pPresentation);
 }
 
 /**
@@ -66,6 +144,18 @@ void QuickGameplayOptionsScene::SceneCreated()
 void QuickGameplayOptionsScene::Update(float dt)
 {
     BaseSceneHandler::Update(dt);
+
+    // MOD (mixed teams): X flips who may throw a Super Strike.
+    if (g_pFEInput->JustPressed(FE_ALL_PADS, 0x400, false, NULL)
+        && GetConfigBool(Config::Global(), "mixed_teams", false))
+    {
+        Config& cfg = Config::Global();
+        bool all = !GetConfigBool(cfg, "super_all", false);
+        cfg.Set("super_all", all);
+        OSReport("[mixed teams] super strikes: %s\n", all ? "everyone" : "captains only");
+        MixedRelabelSuperRow(m_pFEScene->m_pFEPackage->GetPresentation());
+        FEAudio::PlayAnimAudioEvent("sfx_accept_no_screen_change", false);
+    }
 
     if (!g_pFEInput->JustPressed(FE_ALL_PADS, 0x100, false, NULL))
     {
