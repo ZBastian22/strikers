@@ -4,6 +4,8 @@
 #include "Game/FE/fePresentation.h"
 #include "Game/FE/tlSlide.h"
 #include "NL/nlConfig.h"
+#include "Game/FE/feImage.h"
+#include "Game/FE/feTextureResource.h"
 #include "dolphin/os.h"
 
 extern bool g_e3_Build;
@@ -26,6 +28,96 @@ static int gPickCount[2];          // -1 = captain not chosen yet, 0..3 = teamma
 static char gPickNames[2][3][20];
 static bool gPickedASidekick[2];
 
+// The gold pick numbers drawn over chosen faces: each pick re-points that
+// face's menu picture at a digit texture, the same trick the game uses for
+// the little sidekick head. Undone pick by pick when B rewinds.
+extern unsigned long MixedPickerDigitTexture(int digit);
+static FETextureResource gPickerDigitRes[5];
+struct PickerFaceSwap
+{
+    FEImage* mAsset;
+    FETextureResource* mOldRes;
+};
+static PickerFaceSwap gPickerSwap[2][4]; // [side][pick 0=captain,1..3=teammates]
+
+// Indexed by eTeamID: DAISY, DK, LUIGI, MARIO, PEACH, WALUIGI, WARIO, YOSHI, MYSTERY.
+static const char* const kPickerCaptCell[9] = {
+    "choose_capt_daisy", "choose_capt_dk", "choose_capt_luigi", "choose_capt_mario",
+    "choose_capt_peach", "choose_capt_waluigi", "choose_capt_wario", "choose_capt_yoshi",
+    "choose_capt_super",
+};
+
+static const char* PickerSidekickCell(eSidekickID sk)
+{
+    switch (sk)
+    {
+    case SK_TOAD:       return "choose_sidek_toad";
+    case SK_KOOPA:      return "choose_sidek_koopa";
+    case SK_HAMMERBROS: return "choose_sidek_hammer";
+    case SK_BIRDO:      return "choose_sidek_birdo";
+    default:            return NULL;
+    }
+}
+
+// Cover a face with a pick number. pickIdx 0 is the captain (digit 1).
+static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCaptainGrid, const char* cellName)
+{
+    gPickerSwap[side][pickIdx].mAsset = NULL;
+    if (cellName == NULL)
+    {
+        return;
+    }
+
+    unsigned long tex = MixedPickerDigitTexture(pickIdx + 1);
+    if (tex == (unsigned long)-1)
+    {
+        return;
+    }
+    gPickerDigitRes[pickIdx + 1].m_glTextureHandle = tex;
+    gPickerDigitRes[pickIdx + 1].m_bValid = 1;
+
+    TLComponentInstance* grid = onCaptainGrid
+        ? p->mCaptainGridComponents[side]->mParentComponent
+        : p->mSidekickGridComponents[side]->mParentComponent;
+    TLImageInstance* img = FEFinder<TLImageInstance, 2>::Find<TLSlide>(
+        grid->GetActiveSlide(), InlineHasher(nlStringLowerHash(cellName)));
+    if (img == NULL)
+    {
+        return;
+    }
+
+    FEImage* asset = (FEImage*)img->m_component;
+    gPickerSwap[side][pickIdx].mAsset = asset;
+    gPickerSwap[side][pickIdx].mOldRes = asset->m_pFeTextureResource;
+    asset->m_pFeTextureResource = &gPickerDigitRes[pickIdx + 1];
+}
+
+static void PickerUnnumberFace(int side, int pickIdx)
+{
+    if (gPickerSwap[side][pickIdx].mAsset != NULL)
+    {
+        gPickerSwap[side][pickIdx].mAsset->m_pFeTextureResource = gPickerSwap[side][pickIdx].mOldRes;
+        gPickerSwap[side][pickIdx].mAsset = NULL;
+    }
+}
+
+// True when this side already has that character (captain included).
+static bool PickerAlreadyPicked(IChooseCaptain* p, int side, const char* nm)
+{
+    if (gPickCount[side] >= 0 && nlStrCmp<char>(nm, GetTeamName((eTeamID)p->mHomeAwayTeam[side])) == 0)
+    {
+        return true;
+    }
+    for (int k = 0; k < gPickCount[side]; ++k)
+    {
+        if (nlStrCmp<char>(nm, gPickNames[side][k]) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool MixedPickerOn()
 {
     return gPickerOn;
@@ -39,6 +131,13 @@ static void MixedPickerReset()
     gPickerOn = GetConfigBool(cfg, "mixed_teams", false) && GetConfigBool(cfg, "mixed_picker", false);
     gPickCount[0] = gPickCount[1] = -1;
     gPickedASidekick[0] = gPickedASidekick[1] = false;
+    for (int i = 0; i < 2; ++i)
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            gPickerSwap[i][k].mAsset = NULL; // fresh scene, fresh pictures
+        }
+    }
     if (gPickerOn)
     {
         cfg.Set("team1_slot2", ""); cfg.Set("team1_slot3", ""); cfg.Set("team1_slot4", "");
@@ -169,15 +268,20 @@ static bool MixedPickerConfirm(IChooseCaptain* p, int side)
         p->mCaptainGridComponents[side ^ 1]->mMapMenu->SetItemActive(cg->mMapMenu->GetSelectedItem(), false);
 
         count = 0;
+        PickerNumberFace(p, side, 0, true, kPickerCaptCell[(int)sel]);
         FEAudio::PlayAnimAudioEvent("sfx_accept_no_screen_change", false);
         p->mLastCaptainSelectSoundStrPlayed[side] = (char*)FECharacterSound::PlayCaptainName(sel);
         OSReport("[mixed teams] picker: side %d captain = %s\n", side, GetTeamName(sel));
         return true;
     }
 
-    // Teammates two to four, from whichever grid is showing.
+    // Teammates two to four, from whichever grid is showing. Each character
+    // once per team: a face already numbered is refused.
     const char* nm = NULL;
-    if (ph == PHASE_CHOOSING_CAPTAIN)
+    const char* cell = NULL;
+    bool onCaptainGrid = (ph == PHASE_CHOOSING_CAPTAIN);
+    eSidekickID pickedSk = SK_INVALID;
+    if (onCaptainGrid)
     {
         eTeamID sel = p->mCaptainGridComponents[side]->GetSelectedItem();
         if (sel == TEAM_MYSTERY)
@@ -186,20 +290,37 @@ static bool MixedPickerConfirm(IChooseCaptain* p, int side)
             return true;
         }
         nm = GetTeamName(sel);
-        FECharacterSound::PlayCaptainName(sel);
+        cell = kPickerCaptCell[(int)sel];
     }
     else
     {
         eSidekickID sk = p->mSidekickGridComponents[side]->GetSelectedItem();
         nm = GetSidekickName(sk);
-        FECharacterSound::PlaySidekickName(sk);
+        cell = PickerSidekickCell(sk);
+        pickedSk = sk;
+    }
+
+    if (PickerAlreadyPicked(p, side, nm))
+    {
+        FEAudio::PlayAnimAudioEvent("sfx_deny", false);
+        return true;
+    }
+
+    if (onCaptainGrid)
+    {
+        FECharacterSound::PlayCaptainName(p->mCaptainGridComponents[side]->GetSelectedItem());
+    }
+    else
+    {
+        FECharacterSound::PlaySidekickName(pickedSk);
         if (!gPickedASidekick[side])
         {
             gPickedASidekick[side] = true;
-            p->mHomeAwaySidekicks[side] = sk;
+            p->mHomeAwaySidekicks[side] = pickedSk;
         }
     }
 
+    PickerNumberFace(p, side, count + 1, onCaptainGrid, cell);
     nlSNPrintf(gPickNames[side][count], 20, "%s", nm);
     count++;
     FEAudio::PlayAnimAudioEvent("sfx_accept_no_screen_change", false);
@@ -237,6 +358,7 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
     if (count > 0)
     {
         count--;
+        PickerUnnumberFace(side, count + 1);
         if (gPickedASidekick[side])
         {
             // Recount: does any remaining pick still name a sidekick?
@@ -264,6 +386,7 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
     {
         // Un-choose the captain himself.
         count = -1;
+        PickerUnnumberFace(side, 0);
         p->mCaptainGridComponents[side ^ 1]->mMapMenu->SetItemActive(
             p->mCaptainGridComponents[side]->mMapMenu->GetSelectedItem(), true);
         if (ph == PHASE_CHOOSING_SIDEKICK)
