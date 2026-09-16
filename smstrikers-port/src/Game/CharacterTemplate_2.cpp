@@ -28,6 +28,7 @@
 #include "NL/gl/glRenderList.h"
 #include "NL/gl/glTexture.h"
 #include "NL/glx/glxTexture.h"
+#include "port/endian.h"
 
 extern SoundPropAccessor* gpBIRDOSoundPropAccessor;
 extern SoundPropAccessor* gpDAISYSoundPropAccessor;
@@ -580,17 +581,71 @@ static const MixedTeamHue kMixedTeamHues[] = {
     { WALUIGI, 275 },  // purple
 };
 
+// MOD (mixed teams): the Super Strikes rule for this match. When true, only the
+// player in a team's captain slot counts as a captain anywhere in the engine
+// (cPlayer::IsCaptain), so borrowed captains play like sidekicks. Read once
+// when the teams are built; the options menu and super.lua set the setting.
+bool gMixedCaptainsOnly = false;
+
+// Live copies of the per-captain settings, so a mod can tune each captain:
+//   kit_hue_<captain>     his clothing colour on the wheel, 0-359
+//   kit_window_<captain>  how far from that hue a pixel may sit and still count as kit
+//   kit_sat_<captain>     how colourful (0-255) a pixel must be to count as kit
+//   kit_bright_<captain>  how bright his kit is, as a percentage; brightness is scaled
+//                         by (target's kit_bright / his kit_bright) when he is borrowed
+static int gMixedKitHue[8];
+static int gMixedKitWindow[8];
+static int gMixedKitSat[8];
+static int gMixedKitBright[8];
+static int gMixedKitFloor[8];       // pixels darker than this are never touched
+static int gMixedBrightScale = 100; // percent, set per recolour
+
 static bool MixedTeamHueFor(eCharacterClass cc, int* outHue)
 {
     for (unsigned int i = 0; i < sizeof(kMixedTeamHues) / sizeof(kMixedTeamHues[0]); ++i)
     {
         if (kMixedTeamHues[i].cc == cc)
         {
-            *outHue = kMixedTeamHues[i].hue;
+            *outHue = gMixedKitHue[i];
             return true;
         }
     }
     return false;
+}
+
+static int MixedKitIndex(eCharacterClass cc)
+{
+    for (unsigned int i = 0; i < sizeof(kMixedTeamHues) / sizeof(kMixedTeamHues[0]); ++i)
+    {
+        if (kMixedTeamHues[i].cc == cc)
+        {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static void MixedLoadKitHues(Config& cfg)
+{
+    int window = GetConfigInt(cfg, "mixed_hue_window", 45);
+    int sat = GetConfigInt(cfg, "mixed_min_saturation", 90);
+    for (unsigned int i = 0; i < sizeof(kMixedTeamHues) / sizeof(kMixedTeamHues[0]); ++i)
+    {
+        const char* name = GetCharacterName(kMixedTeamHues[i].cc);
+        char szKey[48];
+        nlSNPrintf(szKey, 48, "kit_hue_%s", name);
+        int hue = GetConfigInt(cfg, szKey, kMixedTeamHues[i].hue);
+        gMixedKitHue[i] = ((hue % 360) + 360) % 360;
+        nlSNPrintf(szKey, 48, "kit_window_%s", name);
+        gMixedKitWindow[i] = GetConfigInt(cfg, szKey, window);
+        nlSNPrintf(szKey, 48, "kit_sat_%s", name);
+        gMixedKitSat[i] = GetConfigInt(cfg, szKey, sat);
+        nlSNPrintf(szKey, 48, "kit_bright_%s", name);
+        int bright = GetConfigInt(cfg, szKey, 100);
+        gMixedKitBright[i] = bright < 10 ? 10 : (bright > 400 ? 400 : bright);
+        nlSNPrintf(szKey, 48, "kit_floor_%s", name);
+        gMixedKitFloor[i] = GetConfigInt(cfg, szKey, GetConfigInt(cfg, "mixed_min_brightness", 40));
+    }
 }
 
 // How far from the source hue a pixel may sit and still count as "kit", and how
@@ -680,7 +735,10 @@ static bool MixedShiftPixel(int* r, int* g, int* b, int srcHue, int dstHue)
         return false;
     }
 
-    // Keep the pixel's own variation around the team hue, so shading survives.
+    // Keep the pixel's own variation around the team hue, so shading survives,
+    // and lift or drop its brightness to match the target kit.
+    v = (v * gMixedBrightScale) / 100;
+    if (v > 255) { v = 255; }
     MixedHSVtoRGB(dstHue + dist, s, v, r, g, b);
     return true;
 }
@@ -715,7 +773,7 @@ static bool MixedShift565(u8* p, int srcHue, int dstHue)
 }
 
 // RGB5A3: top bit set means opaque 5:5:5, clear means 3:4:4:4 with alpha.
-static void MixedShift5A3(u8* p, int srcHue, int dstHue)
+static bool MixedShift5A3(u8* p, int srcHue, int dstHue)
 {
     u16 c = MixedReadBE16(p);
     int r, g, b;
@@ -725,36 +783,41 @@ static void MixedShift5A3(u8* p, int srcHue, int dstHue)
         r = ((c >> 10) & 0x1F) * 255 / 31;
         g = ((c >> 5) & 0x1F) * 255 / 31;
         b = (c & 0x1F) * 255 / 31;
-        if (MixedShiftPixel(&r, &g, &b, srcHue, dstHue))
+        if (!MixedShiftPixel(&r, &g, &b, srcHue, dstHue))
         {
-            MixedWriteBE16(p, (u16)(0x8000 | ((r * 31 / 255) << 10) | ((g * 31 / 255) << 5) | (b * 31 / 255)));
+            return false;
         }
+        MixedWriteBE16(p, (u16)(0x8000 | ((r * 31 / 255) << 10) | ((g * 31 / 255) << 5) | (b * 31 / 255)));
+        return true;
     }
-    else
+
+    int a = (c >> 12) & 0x7;
+    r = ((c >> 8) & 0xF) * 255 / 15;
+    g = ((c >> 4) & 0xF) * 255 / 15;
+    b = (c & 0xF) * 255 / 15;
+    if (!MixedShiftPixel(&r, &g, &b, srcHue, dstHue))
     {
-        int a = (c >> 12) & 0x7;
-        r = ((c >> 8) & 0xF) * 255 / 15;
-        g = ((c >> 4) & 0xF) * 255 / 15;
-        b = (c & 0xF) * 255 / 15;
-        if (MixedShiftPixel(&r, &g, &b, srcHue, dstHue))
-        {
-            MixedWriteBE16(p, (u16)((a << 12) | ((r * 15 / 255) << 8) | ((g * 15 / 255) << 4) | (b * 15 / 255)));
-        }
+        return false;
     }
+    MixedWriteBE16(p, (u16)((a << 12) | ((r * 15 / 255) << 8) | ((g * 15 / 255) << 4) | (b * 15 / 255)));
+    return true;
 }
 
-// Walk a whole texture. The GameCube stores pixels in tiles, but a colour does not
-// care where it sits, so tiling can be ignored for everything except RGBA8, whose
-// channels are split across a tile.
-static void MixedShiftTexture(u8* data, u32 sizeBytes, eGXTextureFormat format, int srcHue, int dstHue)
+// Walk a whole texture and return how many pixels (or compressed endpoints) moved.
+// The GameCube stores pixels in tiles, but a colour does not care where it sits,
+// so tiling can be ignored for everything except RGBA8, whose channels are split
+// across a tile.
+static u32 MixedShiftTexture(u8* data, u32 sizeBytes, eGXTextureFormat format, int srcHue, int dstHue)
 {
+    u32 changed = 0;
     switch (format)
     {
     case GXTex_CMPR:
     {
-        // Eight bytes per block: two 5:6:5 endpoints then packed indices. Only the
-        // endpoints move. Their order decides whether the block has transparency, so
-        // a block whose order would flip is left alone rather than risk holes.
+        // Eight bytes per block: two 5:6:5 endpoints then sixteen 2-bit indices.
+        // Only the endpoints move. Their order decides how the indices are read
+        // (and whether index 3 means transparent), so if a shift flips the order
+        // the endpoints are swapped back and the indices re-pointed to match.
         for (u32 off = 0; off + 8 <= sizeBytes; off += 8)
         {
             u8* blk = data + off;
@@ -762,20 +825,52 @@ static void MixedShiftTexture(u8* data, u32 sizeBytes, eGXTextureFormat format, 
             u16 c1 = MixedReadBE16(blk + 2);
             bool wasGreater = (c0 > c1);
 
-            u8 saved[4];
-            saved[0] = blk[0]; saved[1] = blk[1]; saved[2] = blk[2]; saved[3] = blk[3];
-
             bool a = MixedShift565(blk, srcHue, dstHue);
             bool b = MixedShift565(blk + 2, srcHue, dstHue);
-
-            if (a || b)
+            if (!a && !b)
             {
-                u16 n0 = MixedReadBE16(blk);
-                u16 n1 = MixedReadBE16(blk + 2);
-                if ((n0 > n1) != wasGreater)
+                continue;
+            }
+            changed += (a ? 1 : 0) + (b ? 1 : 0);
+
+            u16 n0 = MixedReadBE16(blk);
+            u16 n1 = MixedReadBE16(blk + 2);
+            if (n0 == n1)
+            {
+                // Equal endpoints mean 3-colour mode. If the block was 4-colour,
+                // that would turn its index-3 pixels transparent; nudge one apart.
+                if (wasGreater)
                 {
-                    blk[0] = saved[0]; blk[1] = saved[1]; blk[2] = saved[2]; blk[3] = saved[3];
+                    if (n1 > 0) { MixedWriteBE16(blk + 2, (u16)(n1 - 1)); }
+                    else        { MixedWriteBE16(blk, 1); }
                 }
+                continue;
+            }
+            if ((n0 > n1) == wasGreater)
+            {
+                continue;
+            }
+
+            // Swap the endpoints back into the original order.
+            MixedWriteBE16(blk, n1);
+            MixedWriteBE16(blk + 2, n0);
+
+            // Re-point the indices: in 4-colour mode 0<->1 and 2<->3; in 3-colour
+            // mode 0<->1 while 2 (the blend) and 3 (transparent) stay put.
+            for (int i = 4; i < 8; ++i)
+            {
+                u8 byte = blk[i];
+                u8 out = 0;
+                for (int k = 0; k < 4; ++k)
+                {
+                    u8 idx = (byte >> (k * 2)) & 3;
+                    if (wasGreater || idx < 2)
+                    {
+                        idx ^= 1;
+                    }
+                    out |= (u8)(idx << (k * 2));
+                }
+                blk[i] = out;
             }
         }
         break;
@@ -783,13 +878,13 @@ static void MixedShiftTexture(u8* data, u32 sizeBytes, eGXTextureFormat format, 
     case GXTex_RGB565:
         for (u32 off = 0; off + 2 <= sizeBytes; off += 2)
         {
-            MixedShift565(data + off, srcHue, dstHue);
+            if (MixedShift565(data + off, srcHue, dstHue)) { ++changed; }
         }
         break;
     case GXTex_RGB5A3:
         for (u32 off = 0; off + 2 <= sizeBytes; off += 2)
         {
-            MixedShift5A3(data + off, srcHue, dstHue);
+            if (MixedShift5A3(data + off, srcHue, dstHue)) { ++changed; }
         }
         break;
     case GXTex_RGBA8:
@@ -808,6 +903,7 @@ static void MixedShiftTexture(u8* data, u32 sizeBytes, eGXTextureFormat format, 
                     t[i * 2 + 1] = (u8)r;
                     t[32 + i * 2] = (u8)g;
                     t[32 + i * 2 + 1] = (u8)b;
+                    ++changed;
                 }
             }
         }
@@ -817,12 +913,14 @@ static void MixedShiftTexture(u8* data, u32 sizeBytes, eGXTextureFormat format, 
         // I4, I8, A8, IA8 carry no colour of their own.
         break;
     }
+    return changed;
 }
 
 // Build a recoloured copy of a loaded texture and register it under a new name.
 // Returns the new handle, or -1 if the source is not loaded.
-static u32 MixedMakeRecolouredTexture(u32 srcHandle, const char* newName, int srcHue, int dstHue)
+static u32 MixedMakeRecolouredTexture(u32 srcHandle, const char* newName, int srcHue, int dstHue, u32* pChanged)
 {
+    *pChanged = 0;
     PlatTexture* pSrc = glx_GetTex(srcHandle, false, false);
     if (pSrc == NULL || pSrc->m_SwizzledData == NULL)
     {
@@ -832,6 +930,7 @@ static u32 MixedMakeRecolouredTexture(u32 srcHandle, const char* newName, int sr
     u32 newHandle = glGetTexture(newName);
     if (glx_GetTex(newHandle, false, false) != NULL)
     {
+        *pChanged = 1;
         return newHandle; // already built earlier this match
     }
 
@@ -874,12 +973,12 @@ static u32 MixedMakeRecolouredTexture(u32 srcHandle, const char* newName, int sr
         u8* pal = (u8*)pDst->m_PaletteData;
         for (int i = 0; i < pSrc->m_nPaletteEntries; ++i)
         {
-            MixedShift5A3(pal + i * 2, srcHue, dstHue);
+            if (MixedShift5A3(pal + i * 2, srcHue, dstHue)) { ++*pChanged; }
         }
     }
     else
     {
-        MixedShiftTexture((u8*)pDst->m_SwizzledData, dataSize, pDst->m_Format, srcHue, dstHue);
+        *pChanged = MixedShiftTexture((u8*)pDst->m_SwizzledData, dataSize, pDst->m_Format, srcHue, dstHue);
     }
 
     pDst->Prepare();
@@ -889,12 +988,51 @@ static u32 MixedMakeRecolouredTexture(u32 srcHandle, const char* newName, int sr
         return (u32)-1;
     }
 
-    OSReport("[mixed teams] recoloured %s (%ux%u, format %d, hue %d -> %d)\n",
-             newName, (unsigned)pDst->m_Width, (unsigned)pDst->m_Height, (int)pDst->m_Format, srcHue, dstHue);
+    OSReport("[mixed teams] recoloured %s (%ux%u, format %d, hue %d -> %d, %u pixels moved)\n",
+             newName, (unsigned)pDst->m_Width, (unsigned)pDst->m_Height, (int)pDst->m_Format, srcHue, dstHue, (unsigned)*pChanged);
     return newHandle;
 }
 
+// A captain in a sidekick slot may need more than one picture recoloured (body,
+// face and hat are sometimes separate). The first pair rides in the player's own
+// swap fields; any extras are kept here, and the drawing code asks for them.
+static const cCharacter* gMixedKitChar[10];
+static u32 gMixedKitWas[10][4];
+static u32 gMixedKitWillBe[10][4];
+static int gMixedKitCount[10];
+
+static void MixedKitReset()
+{
+    for (int i = 0; i < 10; ++i)
+    {
+        gMixedKitChar[i] = NULL;
+        gMixedKitCount[i] = 0;
+    }
+}
+
+int MixedKitExtraMappings(const cCharacter* pChar, unsigned long* pWas, unsigned long* pWillBe)
+{
+    for (int i = 0; i < 10; ++i)
+    {
+        if (gMixedKitChar[i] == pChar)
+        {
+            for (int k = 0; k < gMixedKitCount[i]; ++k)
+            {
+                pWas[k] = gMixedKitWas[i][k];
+                pWillBe[k] = gMixedKitWillBe[i][k];
+            }
+            return gMixedKitCount[i];
+        }
+    }
+    return 0;
+}
+
 // Put a captain standing in a sidekick slot into his team's colours.
+//
+// His pictures live in one bundle on the disc, stored under numeric fingerprints
+// rather than names, so instead of guessing names this reads the bundle's own
+// table of contents and tries every colour picture in it. Any picture where the
+// kit colour actually appears gets a recoloured twin.
 static void MixedApplyCaptainKit(cPlayer* pChar, eCharacterClass slotcc, eCharacterClass captaincc)
 {
     int srcHue, dstHue;
@@ -906,45 +1044,118 @@ static void MixedApplyCaptainKit(cPlayer* pChar, eCharacterClass slotcc, eCharac
     {
         return;
     }
-
-    // The texture a captain's model draws with. The first name that is actually
-    // loaded wins; the report says which, so an odd character can be chased down.
-    char szTry[64];
-    const char* name = GetCharacterName(slotcc);
-    u32 srcHandle = (u32)-1;
-
-    nlSNPrintf(szTry, 64, "%s/%s", name, name);
-    if (glx_GetTex(glGetTexture(szTry), false, false) != NULL)
+    if (slotcc >= NUM_FIELDER_CLASSES)
     {
-        srcHandle = glGetTexture(szTry);
+        return;
     }
-    else
+
+    const char* name = GetCharacterName(slotcc);
+
+    // This captain's own net, and the brightness jump to the target kit.
+    int srcIdx = MixedKitIndex(slotcc);
+    int dstIdx = MixedKitIndex(captaincc);
+    gMixedHueWindow = gMixedKitWindow[srcIdx];
+    gMixedMinSat = gMixedKitSat[srcIdx];
+    gMixedMinVal = gMixedKitFloor[srcIdx];
+    gMixedBrightScale = (gMixedKitBright[dstIdx] * 100) / gMixedKitBright[srcIdx];
+    OSReport("[mixed teams] %s -> %s: hue %d -> %d, window %d, min sat %d, brightness x%d%%\n",
+             name, GetCharacterName(captaincc), srcHue, dstHue, gMixedHueWindow, gMixedMinSat, gMixedBrightScale);
+
+    char szPath[256];
+    nlSNPrintf(szPath, 256, "art/%s", g_aCharacterTemplateInfo[slotcc].szTextureFilename);
+    nlFile* pFile = nlOpen(szPath);
+    if (pFile == NULL)
     {
-        nlSNPrintf(szTry, 64, "%s/%s_%s", name, name, name);
-        if (glx_GetTex(glGetTexture(szTry), false, false) != NULL)
+        OSReport("[mixed teams] cannot open %s; keeping %s in his own colours\n", szPath, name);
+        return;
+    }
+
+    u32 header[8];
+    nlRead(pFile, header, 32);
+    port_be32_array(header, 8);
+    u32 count = header[1];
+    if (count == 0 || count > 256)
+    {
+        OSReport("[mixed teams] %s lists %u pictures, which looks wrong; keeping %s in his own colours\n",
+                 szPath, (unsigned)count, name);
+        nlClose(pFile);
+        return;
+    }
+
+    u32* dict = (u32*)nlMalloc(count * 16, 0x20, false);
+    nlRead(pFile, dict, count * 16);
+    nlClose(pFile);
+    port_be32_array(dict, count * 4);
+
+    int slot = -1;
+    for (int i = 0; i < 10; ++i)
+    {
+        if (gMixedKitChar[i] == NULL)
         {
-            srcHandle = glGetTexture(szTry);
+            slot = i;
+            break;
         }
     }
 
-    if (srcHandle == (u32)-1)
+    int found = 0;
+    int done = 0;
+    for (u32 i = 0; i < count && done < 5; ++i)
     {
-        OSReport("[mixed teams] no base texture found for %s; keeping his own colours\n", name);
-        return;
+        u32 hash = dict[i * 4];
+        PlatTexture* pTex = glx_GetTex(hash, false, false);
+        if (pTex == NULL || pTex->m_SwizzledData == NULL)
+        {
+            continue;
+        }
+        ++found;
+
+        bool colour = (pTex->m_nPaletteEntries > 0)
+            || pTex->m_Format == GXTex_CMPR || pTex->m_Format == GXTex_RGB565
+            || pTex->m_Format == GXTex_RGB5A3 || pTex->m_Format == GXTex_RGBA8;
+        OSReport("[mixed teams]   %s picture %08x: %ux%u format %d%s\n", name, (unsigned)hash,
+                 (unsigned)pTex->m_Width, (unsigned)pTex->m_Height, (int)pTex->m_Format,
+                 colour ? "" : " (no colour, skipped)");
+        if (!colour || pTex->m_Width < 16 || pTex->m_Height < 16)
+        {
+            continue;
+        }
+
+        char szNew[64];
+        nlSNPrintf(szNew, 64, "%s_auto_%s_%08x", name, GetCharacterName(captaincc), (unsigned)hash);
+        u32 changed = 0;
+        u32 newHandle = MixedMakeRecolouredTexture(hash, szNew, srcHue, dstHue, &changed);
+        if (newHandle == (u32)-1 || changed == 0)
+        {
+            continue;
+        }
+
+        if (done == 0)
+        {
+            pChar->m_uNormalTextureID = hash;
+            pChar->m_uSwapTextureID = newHandle;
+        }
+        else if (slot >= 0)
+        {
+            gMixedKitChar[slot] = pChar;
+            gMixedKitWas[slot][done - 1] = hash;
+            gMixedKitWillBe[slot][done - 1] = newHandle;
+            gMixedKitCount[slot] = done;
+        }
+        ++done;
     }
 
-    char szNew[64];
-    nlSNPrintf(szNew, 64, "%s_auto_%s", name, GetCharacterName(captaincc));
+    nlFree(dict);
 
-    u32 newHandle = MixedMakeRecolouredTexture(srcHandle, szNew, srcHue, dstHue);
-    if (newHandle == (u32)-1)
+    if (done == 0)
     {
-        OSReport("[mixed teams] could not recolour %s; keeping his own colours\n", name);
-        return;
+        OSReport("[mixed teams] %s: %u pictures in bundle, %d loaded, none carried his kit colour; keeping his own colours\n",
+                 name, (unsigned)count, found);
     }
-
-    pChar->m_uNormalTextureID = srcHandle;
-    pChar->m_uSwapTextureID = newHandle;
+    else
+    {
+        OSReport("[mixed teams] %s now wears %s colours (%d picture(s) recoloured)\n",
+                 name, GetCharacterName(captaincc), done);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -968,24 +1179,32 @@ static const MixedSheenRGB kMixedSheenColours[] = {
     { PEACH, 240, 130, 180 },
     { DAISY, 245, 160, 40 },
     { YOSHI, 110, 220, 70 },
-    { DONKEYKONG, 200, 80, 40 },
+    { DONKEYKONG, 130, 75, 30 },
     { WARIO, 235, 210, 50 },
     { WALUIGI, 140, 60, 200 },
 };
 
 // How strongly the wash reads, 0-255. It scales the colour itself, because the
 // overlay is additive: darker colour, fainter sheen.
-static int gMixedSheenStrength = 200;
+static int gMixedSheenStrength = 130;
 
 // Which characters carry a sheen this match, and the overlay entry each uses.
 static const cCharacter* gMixedSheenChar[10];
 static EffectsTexturing gMixedSheenFx[10];
+
+static int gMixedOutline = 0; // 0-100, the slider; 0 is off
+static const cCharacter* gMixedOutlineChar[10];
+static u32 gMixedOutlineTex[10];
 
 static void MixedSheenReset()
 {
     for (int i = 0; i < 10; ++i)
     {
         gMixedSheenChar[i] = NULL;
+    }
+    for (int i = 0; i < 10; ++i)
+    {
+        gMixedOutlineChar[i] = NULL;
     }
 }
 
@@ -1003,11 +1222,9 @@ EffectsTexturing* MixedTeamSheenFor(const cCharacter* pChar)
     return NULL;
 }
 
-// A 32x32 rim image: black in the middle, the team colour at the edge. Wrapped
-// around the model as an environment map, the black centre lands on surfaces
-// facing the camera and the coloured edge lands on the silhouette, so only the
-// model's borders light up.
-static u32 MixedMakeRimTexture(const char* name, u8 r, u8 g, u8 b)
+// An 8x8 image of one flat colour. Layered over the character the way the star
+// power-up glow is, it tints him without replacing his own skin.
+static u32 MixedMakeGlowTexture(const char* name, u8 r, u8 g, u8 b)
 {
     u32 handle = glGetTexture(name);
     if (glx_GetTex(handle, false, false) != NULL)
@@ -1021,38 +1238,18 @@ static u32 MixedMakeRimTexture(const char* name, u8 r, u8 g, u8 b)
         return (u32)-1;
     }
 
-    pTex->Create(32, 32, GXTex_RGB5A3, 1, true, false);
-    if (pTex->m_SwizzledData == NULL || pTex->m_LinearData == NULL)
+    pTex->Create(8, 8, GXTex_RGB5A3, 1, false, false);
+    if (pTex->m_SwizzledData == NULL)
     {
         return (u32)-1;
     }
 
-    u8* lin = (u8*)pTex->m_LinearData;
-    for (int y = 0; y < 32; ++y)
+    u16 texel = (u16)(0x8000 | ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
+    u8* data = (u8*)pTex->m_SwizzledData;
+    for (int i = 0; i < 64; ++i)
     {
-        for (int x = 0; x < 32; ++x)
-        {
-            // Distance from the centre, 0 in the middle to 256 at the silhouette ring.
-            int dx = x * 2 - 31;
-            int dy = y * 2 - 31;
-            int distSq = dx * dx + dy * dy; // 0 .. ~1922; the ring sits at 31*31=961
-            int t = distSq * 256 / 961;
-            if (t > 256) { t = 256; }
-
-            // Squared ramp: stays dark until close to the edge, then rises fast,
-            // so the glow hugs the outline instead of creeping over the model.
-            int f = t * t / 256; // 0..256
-
-            u16 texel = (u16)(0x8000
-                | ((((r * f) >> 8) >> 3) << 10)
-                | ((((g * f) >> 8) >> 3) << 5)
-                | (((b * f) >> 8) >> 3));
-            MixedWriteBE16(lin + (y * 32 + x) * 2, texel);
-        }
+        MixedWriteBE16(data + i * 2, texel);
     }
-
-    // Reorder the rows into the GameCube's tiled layout, then drop the flat copy.
-    pTex->Swizzle(true);
 
     pTex->Prepare();
     if (!glx_AddTex(handle, pTex))
@@ -1097,9 +1294,9 @@ static void MixedApplySheen(cCharacter* pChar, eCharacterClass captaincc)
     if (strength > 255) { strength = 255; }
 
     char szName[64];
-    nlSNPrintf(szName, 64, "auto_rim_%s", GetCharacterName(captaincc));
+    nlSNPrintf(szName, 64, "auto_glow_%s", GetCharacterName(captaincc));
 
-    u32 texHandle = MixedMakeRimTexture(szName,
+    u32 texHandle = MixedMakeGlowTexture(szName,
                                           (u8)(pColour->r * strength / 255),
                                           (u8)(pColour->g * strength / 255),
                                           (u8)(pColour->b * strength / 255));
@@ -1110,13 +1307,285 @@ static void MixedApplySheen(cCharacter* pChar, eCharacterClass captaincc)
     }
 
     gMixedSheenFx[slot].m_uTexture = texHandle;
-    gMixedSheenFx[slot].m_eBlendMode = GLB_ScaledAdditive;
-    gMixedSheenFx[slot].m_bEnviro = true; // wrap around the model, so the edge of the image hits the silhouette
-    gMixedSheenFx[slot].m_bDetail = false;
+    gMixedSheenFx[slot].m_eBlendMode = GLB_None;   // the star glow settings: layered on top,
+    gMixedSheenFx[slot].m_bEnviro = false;         // not replacing the skin, so the model stays
+    gMixedSheenFx[slot].m_bDetail = true;          // solid and fully himself
     gMixedSheenChar[slot] = pChar;
 
     OSReport("[mixed teams] sheen on %s in %s colours (strength %d)\n",
              GetCharacterName(pChar->m_eCharacterClass), GetCharacterName(captaincc), strength);
+}
+
+// ---------------------------------------------------------------------------
+// MOD (mixed teams): true outline.
+//
+// The character is drawn a second time, inflated a few percent around his own
+// centre, in flat team colour, back faces only. The real model covers all of it
+// except a thin rim past his edges: a drawn outline that follows the pose.
+// The slider (0-100) sets how far the shell sticks out; 0 turns it off.
+// ---------------------------------------------------------------------------
+
+// The per-frame lookup, called from the drawing code. Not static:
+// DrawableCharacter.cpp reaches it.
+int gMixedOutlineCull = 1; // 0 none, 1 front, 2 back: which faces of the shell to hide
+
+bool MixedOutlineFor(const cCharacter* pChar, unsigned long* pTex, float* pScale)
+{
+    static int nPtrHits = 0;
+    static int nClassHits = 0;
+    static int nMisses = 0;
+
+    if (gMixedOutline <= 0 || pChar == NULL)
+    {
+        return false;
+    }
+    for (int i = 0; i < 10; ++i)
+    {
+        if (gMixedOutlineChar[i] == pChar)
+        {
+            if (nPtrHits++ < 3)
+            {
+                OSReport("[mixed teams] draw: outline matched directly (%d)\n", nPtrHits);
+            }
+            *pTex = gMixedOutlineTex[i];
+            *pScale = 1.0f + (float)gMixedOutline * 0.0012f; // 100 -> 12% bigger, sized for the far gameplay camera
+            return true;
+        }
+    }
+    // The renderer may draw from a copied snapshot of the character rather than
+    // the live object, in which case the address differs. Fall back to matching
+    // by who the character is.
+    for (int i = 0; i < 10; ++i)
+    {
+        if (gMixedOutlineChar[i] != NULL
+            && gMixedOutlineChar[i]->m_eCharacterClass == pChar->m_eCharacterClass)
+        {
+            if (nClassHits++ < 3)
+            {
+                OSReport("[mixed teams] draw: outline matched by identity, not address (%d)\n", nClassHits);
+            }
+            *pTex = gMixedOutlineTex[i];
+            *pScale = 1.0f + (float)gMixedOutline * 0.0012f;
+            return true;
+        }
+    }
+    if (nMisses++ < 3)
+    {
+        OSReport("[mixed teams] draw: character %d has no outline entry (%d)\n", (int)pChar->m_eCharacterClass, nMisses);
+    }
+    return false;
+}
+
+static void MixedApplyOutline(cCharacter* pChar, eCharacterClass captaincc)
+{
+    const MixedSheenRGB* pColour = NULL;
+    for (unsigned int i = 0; i < sizeof(kMixedSheenColours) / sizeof(kMixedSheenColours[0]); ++i)
+    {
+        if (kMixedSheenColours[i].cc == captaincc)
+        {
+            pColour = &kMixedSheenColours[i];
+            break;
+        }
+    }
+    if (pColour == NULL || pChar == NULL)
+    {
+        return;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < 10; ++i)
+    {
+        if (gMixedOutlineChar[i] == NULL)
+        {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0)
+    {
+        return;
+    }
+
+    char szName[64];
+    nlSNPrintf(szName, 64, "auto_outline_%s", GetCharacterName(captaincc));
+    u32 tex = MixedMakeGlowTexture(szName, pColour->r, pColour->g, pColour->b);
+    if (tex == (u32)-1)
+    {
+        OSReport("[mixed teams] could not build outline texture for %s\n", GetCharacterName(captaincc));
+        return;
+    }
+
+    gMixedOutlineTex[slot] = tex;
+    gMixedOutlineChar[slot] = pChar;
+    OSReport("[mixed teams] outline on %s in %s colours (size %d)\n",
+             GetCharacterName(pChar->m_eCharacterClass), GetCharacterName(captaincc), gMixedOutline);
+}
+
+// ---------------------------------------------------------------------------
+// MOD (mixed teams): team numbers over heads.
+//
+// Every fielder gets a number in his captain's colour: 1 for whoever has the
+// ball (or is being controlled), 2-4 for the rest. The digit images are built
+// in memory here; Indicators.cpp draws them where the game draws its own
+// controller numbers.
+// ---------------------------------------------------------------------------
+
+static bool gMixedNumbers = false;
+static u32 gMixedNumberTex[2][5]; // [team side][digit], digit 1..4 used
+
+bool MixedNumbersOn()
+{
+    return gMixedNumbers;
+}
+
+// The picker's own digits: gold, one per pick, built on first use.
+static u32 gPickerDigitTex[5];
+unsigned long MixedPickerDigitTexture(int digit);
+
+unsigned long MixedNumberTexture(int side, int digit)
+{
+    if (side < 0 || side > 1 || digit < 1 || digit > 4)
+    {
+        return (unsigned long)-1;
+    }
+    return gMixedNumberTex[side][digit];
+}
+
+// 5x7 pixel digits.
+static const char* const kMixedDigitRows[5][7] = {
+    { ".....", ".....", ".....", ".....", ".....", ".....", "....." },
+    { "..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###." },
+    { ".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####" },
+    { "####.", "....#", "....#", ".###.", "....#", "....#", "####." },
+    { "...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#." },
+};
+
+// A 32x32 digit: coloured fill, black outline, transparent elsewhere. Written
+// straight into the GameCube's 4x4 tile layout for 16-bit textures.
+static u32 MixedMakeDigitTexture(const char* name, int digit, u8 r, u8 g, u8 b)
+{
+    u32 handle = glGetTexture(name);
+    if (glx_GetTex(handle, false, false) != NULL)
+    {
+        return handle;
+    }
+
+    PlatTexture* pTex = glx_CreatePlatTexture();
+    if (pTex == NULL)
+    {
+        return (u32)-1;
+    }
+    pTex->Create(32, 32, GXTex_RGB5A3, 1, false, false);
+    if (pTex->m_SwizzledData == NULL)
+    {
+        return (u32)-1;
+    }
+
+    // Glyph cells are 7 wide by 9 tall including a one-cell outline ring, scaled
+    // by 3 to 21x27, centred in 32x32.
+    const int scale = 3;
+    const int x0 = (32 - 7 * scale) / 2;
+    const int y0 = (32 - 9 * scale) / 2;
+
+    const u16 fill = (u16)(0x8000 | ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
+    const u16 edge = (u16)(0x8000 | (2 << 10) | (2 << 5) | 2);
+    const u16 clear = 0;
+
+    u8* data = (u8*)pTex->m_SwizzledData;
+    for (int y = 0; y < 32; ++y)
+    {
+        for (int x = 0; x < 32; ++x)
+        {
+            int cx = (x - x0) / scale - 1; // glyph column, -1..5
+            int cy = (y - y0) / scale - 1; // glyph row, -1..7
+            bool inCell = (x >= x0) && (y >= y0) && (x < x0 + 7 * scale) && (y < y0 + 9 * scale);
+
+            u16 texel = clear;
+            if (inCell)
+            {
+                bool on = (cx >= 0 && cx < 5 && cy >= 0 && cy < 7) && kMixedDigitRows[digit][cy][cx] == '#';
+                if (on)
+                {
+                    texel = fill;
+                }
+                else
+                {
+                    // Outline: any lit neighbour within one cell.
+                    bool near = false;
+                    for (int dy = -1; dy <= 1 && !near; ++dy)
+                    {
+                        for (int dx = -1; dx <= 1 && !near; ++dx)
+                        {
+                            int nx = cx + dx;
+                            int ny = cy + dy;
+                            if (nx >= 0 && nx < 5 && ny >= 0 && ny < 7 && kMixedDigitRows[digit][ny][nx] == '#')
+                            {
+                                near = true;
+                            }
+                        }
+                    }
+                    if (near)
+                    {
+                        texel = edge;
+                    }
+                }
+            }
+
+            int tileIndex = (y / 4) * (32 / 4) + (x / 4);
+            int inTile = (y % 4) * 4 + (x % 4);
+            MixedWriteBE16(data + (tileIndex * 16 + inTile) * 2, texel);
+        }
+    }
+
+    pTex->Prepare();
+    if (!glx_AddTex(handle, pTex))
+    {
+        return (u32)-1;
+    }
+    return handle;
+}
+
+unsigned long MixedPickerDigitTexture(int digit)
+{
+    if (digit < 1 || digit > 4)
+    {
+        return (unsigned long)-1;
+    }
+    if (gPickerDigitTex[digit] == 0)
+    {
+        char szName[32];
+        nlSNPrintf(szName, 32, "picker_digit_%d", digit);
+        gPickerDigitTex[digit] = MixedMakeDigitTexture(szName, digit, 255, 205, 40);
+    }
+    return gPickerDigitTex[digit];
+}
+
+static void MixedBuildNumberTextures(const eCharacterClass* captain)
+{
+    for (int side = 0; side < 2; ++side)
+    {
+        const MixedSheenRGB* pColour = NULL;
+        for (unsigned int i = 0; i < sizeof(kMixedSheenColours) / sizeof(kMixedSheenColours[0]); ++i)
+        {
+            if (kMixedSheenColours[i].cc == captain[side])
+            {
+                pColour = &kMixedSheenColours[i];
+                break;
+            }
+        }
+        u8 r = 255, g = 255, b = 255;
+        if (pColour != NULL)
+        {
+            r = pColour->r; g = pColour->g; b = pColour->b;
+        }
+        for (int d = 1; d <= 4; ++d)
+        {
+            char szName[64];
+            nlSNPrintf(szName, 64, "auto_num%d_%s", d, GetCharacterName(captain[side]));
+            gMixedNumberTex[side][d] = MixedMakeDigitTexture(szName, d, r, g, b);
+        }
+        OSReport("[mixed teams] numbers built for side %d in %s colours\n", side, GetCharacterName(captain[side]));
+    }
 }
 
 // MOD (mixed teams): with `mixed_teams` on, each of a team's three sidekick slots may hold its own
@@ -1180,13 +1649,33 @@ void CreateCharacters()
     bool mixedRecolour = GetConfigBool(cfg, "mixed_recolour", true);
     bool mixedSheen = GetConfigBool(cfg, "mixed_sheen", false);
     MixedSheenReset(); // always: stale pointers from a previous match must never survive
+    MixedKitReset();
+    gMixedCaptainsOnly = GetConfigBool(cfg, "mixed_teams", false) && !GetConfigBool(cfg, "super_all", false);
+    OSReport("[mixed teams] super strikes this match: %s\n", gMixedCaptainsOnly ? "captains only" : "everyone");
+    gMixedNumbers = false;
     if (mixedTeams)
     {
         // The knobs are here so a bad-looking character can be tuned without a rebuild.
-        gMixedHueWindow = GetConfigInt(cfg, "mixed_hue_window", 45);
-        gMixedMinSat = GetConfigInt(cfg, "mixed_min_saturation", 90);
         gMixedMinVal = GetConfigInt(cfg, "mixed_min_brightness", 40);
-        gMixedSheenStrength = GetConfigInt(cfg, "mixed_sheen_strength", 200);
+        MixedLoadKitHues(cfg); // also reads mixed_hue_window / mixed_min_saturation as defaults
+
+        gMixedSheenStrength = GetConfigInt(cfg, "mixed_sheen_strength", 130);
+        gMixedOutline = GetConfigInt(cfg, "mixed_outline", 0);
+        if (gMixedOutline > 100) { gMixedOutline = 100; }
+        BasicString<char, Detail::TempStringAllocator> cullName
+            = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("mixed_outline_cull", BasicString<char, Detail::TempStringAllocator>("front"));
+        gMixedOutlineCull = 1;
+        if (nlStrCmp<char>(cullName.c_str(), "none") == 0) { gMixedOutlineCull = 0; }
+        if (nlStrCmp<char>(cullName.c_str(), "back") == 0) { gMixedOutlineCull = 2; }
+        if (gMixedOutline > 0)
+        {
+            OSReport("[mixed teams] outline size %d, cull %s\n", gMixedOutline, cullName.c_str());
+        }
+        gMixedNumbers = GetConfigBool(cfg, "mixed_numbers", false);
+        if (gMixedNumbers)
+        {
+            MixedBuildNumberTextures(captain);
+        }
         OSReport("[mixed teams] on: each sidekick slot may hold its own character (recolour %s, sheen %s)\n",
                  mixedRecolour ? "on" : "off", mixedSheen ? "on" : "off");
     }
@@ -1276,6 +1765,10 @@ void CreateCharacters()
                 if (mixedSheen)
                 {
                     MixedApplySheen(g_pCharacters[charIdx], captain[plrindex]);
+                }
+                if (gMixedOutline > 0)
+                {
+                    MixedApplyOutline(g_pCharacters[charIdx], captain[plrindex]);
                 }
             }
             else

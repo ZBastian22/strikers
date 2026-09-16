@@ -874,7 +874,18 @@ bool cPlayer::IsOnSameTeam(cPlayer* other)
  */
 bool cPlayer::IsCaptain() const
 {
-    return ::IsCaptain(m_eCharacterClass);
+    if (!::IsCaptain(m_eCharacterClass))
+    {
+        return false;
+    }
+    // MOD (mixed teams): under the captains-only rule, a captain borrowed into a
+    // sidekick slot is not this team's captain: no Super Strike, no captain AI.
+    extern bool gMixedCaptainsOnly;
+    if (gMixedCaptainsOnly && m_pTeam != NULL)
+    {
+        return m_pTeam->m_pPlayers[0] == this;
+    }
+    return true;
 }
 
 /**
