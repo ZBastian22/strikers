@@ -968,7 +968,7 @@ static const MixedSheenRGB kMixedSheenColours[] = {
     { PEACH, 240, 130, 180 },
     { DAISY, 245, 160, 40 },
     { YOSHI, 110, 220, 70 },
-    { DONKEYKONG, 200, 80, 40 },
+    { DONKEYKONG, 130, 75, 30 },
     { WARIO, 235, 210, 50 },
     { WALUIGI, 140, 60, 200 },
 };
@@ -1137,7 +1137,7 @@ bool MixedOutlineFor(const cCharacter* pChar, unsigned long* pTex, float* pScale
                 OSReport("[mixed teams] draw: outline matched directly (%d)\n", nPtrHits);
             }
             *pTex = gMixedOutlineTex[i];
-            *pScale = 1.0f + (float)gMixedOutline * 0.0006f; // 100 -> 6% bigger
+            *pScale = 1.0f + (float)gMixedOutline * 0.0012f; // 100 -> 12% bigger, sized for the far gameplay camera
             return true;
         }
     }
@@ -1154,7 +1154,7 @@ bool MixedOutlineFor(const cCharacter* pChar, unsigned long* pTex, float* pScale
                 OSReport("[mixed teams] draw: outline matched by identity, not address (%d)\n", nClassHits);
             }
             *pTex = gMixedOutlineTex[i];
-            *pScale = 1.0f + (float)gMixedOutline * 0.0006f;
+            *pScale = 1.0f + (float)gMixedOutline * 0.0012f;
             return true;
         }
     }
@@ -1208,6 +1208,154 @@ static void MixedApplyOutline(cCharacter* pChar, eCharacterClass captaincc)
     gMixedOutlineChar[slot] = pChar;
     OSReport("[mixed teams] outline on %s in %s colours (size %d)\n",
              GetCharacterName(pChar->m_eCharacterClass), GetCharacterName(captaincc), gMixedOutline);
+}
+
+// ---------------------------------------------------------------------------
+// MOD (mixed teams): team numbers over heads.
+//
+// Every fielder gets a number in his captain's colour: 1 for whoever has the
+// ball (or is being controlled), 2-4 for the rest. The digit images are built
+// in memory here; Indicators.cpp draws them where the game draws its own
+// controller numbers.
+// ---------------------------------------------------------------------------
+
+static bool gMixedNumbers = false;
+static u32 gMixedNumberTex[2][5]; // [team side][digit], digit 1..4 used
+
+bool MixedNumbersOn()
+{
+    return gMixedNumbers;
+}
+
+unsigned long MixedNumberTexture(int side, int digit)
+{
+    if (side < 0 || side > 1 || digit < 1 || digit > 4)
+    {
+        return (unsigned long)-1;
+    }
+    return gMixedNumberTex[side][digit];
+}
+
+// 5x7 pixel digits.
+static const char* const kMixedDigitRows[5][7] = {
+    { ".....", ".....", ".....", ".....", ".....", ".....", "....." },
+    { "..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###." },
+    { ".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####" },
+    { "####.", "....#", "....#", ".###.", "....#", "....#", "####." },
+    { "...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#." },
+};
+
+// A 32x32 digit: coloured fill, black outline, transparent elsewhere. Written
+// straight into the GameCube's 4x4 tile layout for 16-bit textures.
+static u32 MixedMakeDigitTexture(const char* name, int digit, u8 r, u8 g, u8 b)
+{
+    u32 handle = glGetTexture(name);
+    if (glx_GetTex(handle, false, false) != NULL)
+    {
+        return handle;
+    }
+
+    PlatTexture* pTex = glx_CreatePlatTexture();
+    if (pTex == NULL)
+    {
+        return (u32)-1;
+    }
+    pTex->Create(32, 32, GXTex_RGB5A3, 1, false, false);
+    if (pTex->m_SwizzledData == NULL)
+    {
+        return (u32)-1;
+    }
+
+    // Glyph cells are 7 wide by 9 tall including a one-cell outline ring, scaled
+    // by 3 to 21x27, centred in 32x32.
+    const int scale = 3;
+    const int x0 = (32 - 7 * scale) / 2;
+    const int y0 = (32 - 9 * scale) / 2;
+
+    const u16 fill = (u16)(0x8000 | ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
+    const u16 edge = (u16)(0x8000 | (2 << 10) | (2 << 5) | 2);
+    const u16 clear = 0;
+
+    u8* data = (u8*)pTex->m_SwizzledData;
+    for (int y = 0; y < 32; ++y)
+    {
+        for (int x = 0; x < 32; ++x)
+        {
+            int cx = (x - x0) / scale - 1; // glyph column, -1..5
+            int cy = (y - y0) / scale - 1; // glyph row, -1..7
+            bool inCell = (x >= x0) && (y >= y0) && (x < x0 + 7 * scale) && (y < y0 + 9 * scale);
+
+            u16 texel = clear;
+            if (inCell)
+            {
+                bool on = (cx >= 0 && cx < 5 && cy >= 0 && cy < 7) && kMixedDigitRows[digit][cy][cx] == '#';
+                if (on)
+                {
+                    texel = fill;
+                }
+                else
+                {
+                    // Outline: any lit neighbour within one cell.
+                    bool near = false;
+                    for (int dy = -1; dy <= 1 && !near; ++dy)
+                    {
+                        for (int dx = -1; dx <= 1 && !near; ++dx)
+                        {
+                            int nx = cx + dx;
+                            int ny = cy + dy;
+                            if (nx >= 0 && nx < 5 && ny >= 0 && ny < 7 && kMixedDigitRows[digit][ny][nx] == '#')
+                            {
+                                near = true;
+                            }
+                        }
+                    }
+                    if (near)
+                    {
+                        texel = edge;
+                    }
+                }
+            }
+
+            int tileIndex = (y / 4) * (32 / 4) + (x / 4);
+            int inTile = (y % 4) * 4 + (x % 4);
+            MixedWriteBE16(data + (tileIndex * 16 + inTile) * 2, texel);
+        }
+    }
+
+    pTex->Prepare();
+    if (!glx_AddTex(handle, pTex))
+    {
+        return (u32)-1;
+    }
+    return handle;
+}
+
+static void MixedBuildNumberTextures(const eCharacterClass* captain)
+{
+    for (int side = 0; side < 2; ++side)
+    {
+        const MixedSheenRGB* pColour = NULL;
+        for (unsigned int i = 0; i < sizeof(kMixedSheenColours) / sizeof(kMixedSheenColours[0]); ++i)
+        {
+            if (kMixedSheenColours[i].cc == captain[side])
+            {
+                pColour = &kMixedSheenColours[i];
+                break;
+            }
+        }
+        u8 r = 255, g = 255, b = 255;
+        if (pColour != NULL)
+        {
+            r = pColour->r; g = pColour->g; b = pColour->b;
+        }
+        for (int d = 1; d <= 4; ++d)
+        {
+            char szName[64];
+            nlSNPrintf(szName, 64, "auto_num%d_%s", d, GetCharacterName(captain[side]));
+            gMixedNumberTex[side][d] = MixedMakeDigitTexture(szName, d, r, g, b);
+        }
+        OSReport("[mixed teams] numbers built for side %d in %s colours\n", side, GetCharacterName(captain[side]));
+    }
 }
 
 // MOD (mixed teams): with `mixed_teams` on, each of a team's three sidekick slots may hold its own
@@ -1271,6 +1419,7 @@ void CreateCharacters()
     bool mixedRecolour = GetConfigBool(cfg, "mixed_recolour", true);
     bool mixedSheen = GetConfigBool(cfg, "mixed_sheen", false);
     MixedSheenReset(); // always: stale pointers from a previous match must never survive
+    gMixedNumbers = false;
     if (mixedTeams)
     {
         // The knobs are here so a bad-looking character can be tuned without a rebuild.
@@ -1288,6 +1437,11 @@ void CreateCharacters()
         if (gMixedOutline > 0)
         {
             OSReport("[mixed teams] outline size %d, cull %s\n", gMixedOutline, cullName.c_str());
+        }
+        gMixedNumbers = GetConfigBool(cfg, "mixed_numbers", false);
+        if (gMixedNumbers)
+        {
+            MixedBuildNumberTextures(captain);
         }
         OSReport("[mixed teams] on: each sidekick slot may hold its own character (recolour %s, sheen %s)\n",
                  mixedRecolour ? "on" : "off", mixedSheen ? "on" : "off");
