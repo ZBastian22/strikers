@@ -6,6 +6,9 @@
 #include "NL/nlConfig.h"
 #include "Game/FE/feImage.h"
 #include "Game/FE/feTextureResource.h"
+#include "Game/FE/tlComponent.h"
+#include <string.h>
+#include "NL/gl/glTexture.h"
 #include "dolphin/os.h"
 
 extern bool g_e3_Build;
@@ -28,15 +31,21 @@ static int gPickCount[2];          // -1 = captain not chosen yet, 0..3 = teamma
 static char gPickNames[2][3][20];
 static bool gPickedASidekick[2];
 
-// The gold pick numbers drawn over chosen faces: each pick re-points that
-// face's menu picture at a digit texture, the same trick the game uses for
-// the little sidekick head. Undone pick by pick when B rewinds.
+// The pick numbers drawn over chosen faces. A grid cell is a small container
+// with one or more pictures inside (one per look). Each of those pictures
+// gets a private copy of its picture asset, re-pointed at a digit texture,
+// so nothing shared with other cells or screens is touched. Undone pick by
+// pick when B rewinds.
 extern unsigned long MixedPickerDigitTexture(int digit);
 static FETextureResource gPickerDigitRes[5];
+
+enum { kPickerMaxFaces = 8 };
 struct PickerFaceSwap
 {
-    FEImage* mAsset;
-    FETextureResource* mOldRes;
+    int mCount;
+    TLInstance* mImage[kPickerMaxFaces];
+    TLComponent* mOriginalAsset[kPickerMaxFaces];
+    FEImage* mClone[kPickerMaxFaces];
 };
 static PickerFaceSwap gPickerSwap[2][4]; // [side][pick 0=captain,1..3=teammates]
 
@@ -59,10 +68,56 @@ static const char* PickerSidekickCell(eSidekickID sk)
     }
 }
 
+// Collect every picture inside a cell, across all of its looks.
+static void PickerCollectImages(TLInstance* inst, PickerFaceSwap* out, int depth)
+{
+    if (inst == NULL || depth > 6 || out->mCount >= kPickerMaxFaces)
+    {
+        return;
+    }
+    if (inst->m_type == TLAT_IMAGE)
+    {
+        out->mImage[out->mCount++] = inst;
+    }
+    else if (inst->m_type == TLAT_COMPONENT && inst->m_component != NULL && inst->m_component->pChildren != NULL)
+    {
+        TLSlide* head = inst->m_component->pChildren;
+        TLSlide* slide = head;
+        for (int guard = 0; guard < 32; ++guard)
+        {
+            if (slide->m_instances != NULL)
+            {
+                TLInstance* ihead = slide->m_instances;
+                TLInstance* ic = ihead;
+                for (int g2 = 0; g2 < 64; ++g2)
+                {
+                    PickerCollectImages(ic, out, depth + 1);
+                    ic = ic->m_next;
+                    if (ic == ihead || ic == NULL) break;
+                }
+            }
+            slide = slide->m_next;
+            if (slide == head || slide == NULL) break;
+        }
+    }
+    if (inst->pChildren != NULL)
+    {
+        TLInstance* head = inst->pChildren;
+        TLInstance* c = head;
+        for (int guard = 0; guard < 64; ++guard)
+        {
+            PickerCollectImages(c, out, depth + 1);
+            c = c->m_next;
+            if (c == head || c == NULL) break;
+        }
+    }
+}
+
 // Cover a face with a pick number. pickIdx 0 is the captain (digit 1).
 static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCaptainGrid, const char* cellName)
 {
-    gPickerSwap[side][pickIdx].mAsset = NULL;
+    PickerFaceSwap* swap = &gPickerSwap[side][pickIdx];
+    swap->mCount = 0;
     if (cellName == NULL)
     {
         return;
@@ -79,26 +134,37 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
     TLComponentInstance* grid = onCaptainGrid
         ? p->mCaptainGridComponents[side]->mParentComponent
         : p->mSidekickGridComponents[side]->mParentComponent;
-    TLImageInstance* img = FEFinder<TLImageInstance, 2>::Find<TLSlide>(
+    TLInstance* cell = FEFinder<TLInstance, 2>::Find<TLSlide>(
         grid->GetActiveSlide(), InlineHasher(nlStringLowerHash(cellName)));
-    if (img == NULL)
+    if (cell == NULL)
     {
+        OSReport("[mixed teams] picker: cell %s not found\n", cellName);
         return;
     }
 
-    FEImage* asset = (FEImage*)img->m_component;
-    gPickerSwap[side][pickIdx].mAsset = asset;
-    gPickerSwap[side][pickIdx].mOldRes = asset->m_pFeTextureResource;
-    asset->m_pFeTextureResource = &gPickerDigitRes[pickIdx + 1];
+    PickerCollectImages(cell, swap, 0);
+    for (int i = 0; i < swap->mCount; ++i)
+    {
+        TLInstance* img = swap->mImage[i];
+        FEImage* clone = (FEImage*)nlMalloc(sizeof(FEImage), 8, false);
+        memcpy(clone, img->m_component, sizeof(FEImage));
+        clone->m_pFeTextureResource = &gPickerDigitRes[pickIdx + 1];
+        swap->mOriginalAsset[i] = img->m_component;
+        swap->mClone[i] = clone;
+        img->m_component = (TLComponent*)clone;
+    }
+    OSReport("[mixed teams] picker: %d picture(s) in %s numbered %d\n", swap->mCount, cellName, pickIdx + 1);
 }
 
 static void PickerUnnumberFace(int side, int pickIdx)
 {
-    if (gPickerSwap[side][pickIdx].mAsset != NULL)
+    PickerFaceSwap* swap = &gPickerSwap[side][pickIdx];
+    for (int i = 0; i < swap->mCount; ++i)
     {
-        gPickerSwap[side][pickIdx].mAsset->m_pFeTextureResource = gPickerSwap[side][pickIdx].mOldRes;
-        gPickerSwap[side][pickIdx].mAsset = NULL;
+        swap->mImage[i]->m_component = swap->mOriginalAsset[i];
+        nlFree(swap->mClone[i]);
     }
+    swap->mCount = 0;
 }
 
 // True when this side already has that character (captain included).
@@ -135,7 +201,7 @@ static void MixedPickerReset()
     {
         for (int k = 0; k < 4; ++k)
         {
-            gPickerSwap[i][k].mAsset = NULL; // fresh scene, fresh pictures
+            gPickerSwap[i][k].mCount = 0; // fresh scene, fresh pictures
         }
     }
     if (gPickerOn)
