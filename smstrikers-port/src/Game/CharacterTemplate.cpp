@@ -591,6 +591,7 @@ static int gMixedKitHue[8];
 static int gMixedKitWindow[8];
 static int gMixedKitSat[8];
 static int gMixedKitBright[8];
+static int gMixedKitFloor[8];       // pixels darker than this are never touched
 static int gMixedBrightScale = 100; // percent, set per recolour
 
 static bool MixedTeamHueFor(eCharacterClass cc, int* outHue)
@@ -636,6 +637,8 @@ static void MixedLoadKitHues(Config& cfg)
         nlSNPrintf(szKey, 48, "kit_bright_%s", name);
         int bright = GetConfigInt(cfg, szKey, 100);
         gMixedKitBright[i] = bright < 10 ? 10 : (bright > 400 ? 400 : bright);
+        nlSNPrintf(szKey, 48, "kit_floor_%s", name);
+        gMixedKitFloor[i] = GetConfigInt(cfg, szKey, GetConfigInt(cfg, "mixed_min_brightness", 40));
     }
 }
 
@@ -1047,6 +1050,7 @@ static void MixedApplyCaptainKit(cPlayer* pChar, eCharacterClass slotcc, eCharac
     int dstIdx = MixedKitIndex(captaincc);
     gMixedHueWindow = gMixedKitWindow[srcIdx];
     gMixedMinSat = gMixedKitSat[srcIdx];
+    gMixedMinVal = gMixedKitFloor[srcIdx];
     gMixedBrightScale = (gMixedKitBright[dstIdx] * 100) / gMixedKitBright[srcIdx];
     OSReport("[mixed teams] %s -> %s: hue %d -> %d, window %d, min sat %d, brightness x%d%%\n",
              name, GetCharacterName(captaincc), srcHue, dstHue, gMixedHueWindow, gMixedMinSat, gMixedBrightScale);
@@ -1428,6 +1432,10 @@ bool MixedNumbersOn()
     return gMixedNumbers;
 }
 
+// The picker's own digits: gold, one per pick, built on first use.
+static u32 gPickerDigitTex[5];
+unsigned long MixedPickerDigitTexture(int digit);
+
 unsigned long MixedNumberTexture(int side, int digit)
 {
     if (side < 0 || side > 1 || digit < 1 || digit > 4)
@@ -1529,6 +1537,21 @@ static u32 MixedMakeDigitTexture(const char* name, int digit, u8 r, u8 g, u8 b)
         return (u32)-1;
     }
     return handle;
+}
+
+unsigned long MixedPickerDigitTexture(int digit)
+{
+    if (digit < 1 || digit > 4)
+    {
+        return (unsigned long)-1;
+    }
+    if (gPickerDigitTex[digit] == 0)
+    {
+        char szName[32];
+        nlSNPrintf(szName, 32, "picker_digit_%d", digit);
+        gPickerDigitTex[digit] = MixedMakeDigitTexture(szName, digit, 255, 205, 40);
+    }
+    return gPickerDigitTex[digit];
 }
 
 static void MixedBuildNumberTextures(const eCharacterClass* captain)
