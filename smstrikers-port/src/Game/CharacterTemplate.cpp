@@ -581,6 +581,12 @@ static const MixedTeamHue kMixedTeamHues[] = {
     { WALUIGI, 275 },  // purple
 };
 
+// MOD (mixed teams): the Super Strikes rule for this match. When true, only the
+// player in a team's captain slot counts as a captain anywhere in the engine
+// (cPlayer::IsCaptain), so borrowed captains play like sidekicks. Read once
+// when the teams are built; the options menu and super.lua set the setting.
+bool gMixedCaptainsOnly = false;
+
 // Live copies of the per-captain settings, so a mod can tune each captain:
 //   kit_hue_<captain>     his clothing colour on the wheel, 0-359
 //   kit_window_<captain>  how far from that hue a pixel may sit and still count as kit
@@ -1644,12 +1650,15 @@ void CreateCharacters()
     bool mixedSheen = GetConfigBool(cfg, "mixed_sheen", false);
     MixedSheenReset(); // always: stale pointers from a previous match must never survive
     MixedKitReset();
+    gMixedCaptainsOnly = GetConfigBool(cfg, "mixed_teams", false) && !GetConfigBool(cfg, "super_all", false);
+    OSReport("[mixed teams] super strikes this match: %s\n", gMixedCaptainsOnly ? "captains only" : "everyone");
     gMixedNumbers = false;
     if (mixedTeams)
     {
         // The knobs are here so a bad-looking character can be tuned without a rebuild.
         gMixedMinVal = GetConfigInt(cfg, "mixed_min_brightness", 40);
         MixedLoadKitHues(cfg); // also reads mixed_hue_window / mixed_min_saturation as defaults
+
         gMixedSheenStrength = GetConfigInt(cfg, "mixed_sheen_strength", 130);
         gMixedOutline = GetConfigInt(cfg, "mixed_outline", 0);
         if (gMixedOutline > 100) { gMixedOutline = 100; }
