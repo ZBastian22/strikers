@@ -347,15 +347,22 @@ void NisPlayer::Reset()
 // character would celebrate with somebody else's file. Presentation sets the
 // scorer's name here before a goal cutscene loads; it is consumed once.
 static char gNisScorerFilter[32];
+static int gNisScorerIndex = -1; // the scorer's character index, for the whole goal sequence
 
 void NisSetScorerFilter(const char* name)
 {
     if (name == NULL)
     {
         gNisScorerFilter[0] = 0;
+        gNisScorerIndex = -1;
         return;
     }
     nlSNPrintf(gNisScorerFilter, 32, "%s", name);
+}
+
+int NisGetScorerIndex()
+{
+    return gNisScorerIndex;
 }
 
 /**
@@ -720,13 +727,9 @@ void NisPlayer::Load(const char* nisType, NisTarget target, NisUseStadiumOffset 
     mActive = true;
 
     BasicString<char, Detail::TempStringAllocator> filter = GetTargetFilter(target, winnerType);
-    if (target == NIS_TARGET_WINNER_SIDEKICK || target == NIS_TARGET_WINNER_CAPTAIN)
+    if ((target == NIS_TARGET_WINNER_SIDEKICK || target == NIS_TARGET_WINNER_CAPTAIN) && gNisScorerFilter[0] != 0)
     {
-        if (gNisScorerFilter[0] != 0)
-        {
-            OSReport("[mixed teams] goal cutscene for %s\n", gNisScorerFilter);
-        }
-        gNisScorerFilter[0] = 0; // MOD (mixed teams): one goal, one use
+        OSReport("[mixed teams] goal cutscene for %s\n", gNisScorerFilter); // kept until the goal sequence ends
     }
 
     if (filter == "myst_sidekick" && strstr(nisType, "goal_winner") != NULL)
@@ -770,10 +773,14 @@ void NisPlayer::Load(const char* nisType, NisTarget target, NisUseStadiumOffset 
 
     if (numAvailableNis == 0)
     {
+        OSReport("[mixed teams] nis: no file for type '%s' with filter '%s' (target %d)\n",
+                 nisType, filter.c_str() ? filter.c_str() : "", (int)target);
         return;
     }
 
     NisHeader& nisHeader = *availableNis[nlRandom(numAvailableNis, &nlDefaultSeed)];
+    OSReport("[mixed teams] nis: type '%s' filter '%s' target %d: %d match(es), playing '%s'\n",
+             nisType, filter.c_str() ? filter.c_str() : "", (int)target, numAvailableNis, nisHeader.name);
 
     for (int i = 0; i < 4; i++)
     {
@@ -876,8 +883,10 @@ void NisPlayer::EventHandler(Event* event)
                 g_ForceDoubleBallTransition = 1;
             }
 
-            // MOD (mixed teams): the scorer is always the cutscene's star, captain or not.
+            // MOD (mixed teams): the scorer is always the cutscene's star, captain or not,
+            // and stays so for every cutscene in this goal's sequence.
             mGoalScorerCharIndex = GetCharacterIndex(goalScoredData->pLastTouch[goalScoredData->uTeamIndex]);
+            gNisScorerIndex = mGoalScorerCharIndex;
         }
     }
 
