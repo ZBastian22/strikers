@@ -17,6 +17,12 @@
 #include "Game/Drawable/DrawableObj.h"
 #include "Game/FE/feHelpFuncs.h"
 #include "Game/Field.h"
+#include "Game/Ball.h"
+#include "Game/Team.h"
+#include "Game/Player.h"
+#include "NL/globalpad.h"
+#include "NL/gl/glMatrix.h"
+#include "dolphin/os.h"
 #include "Game/Net.h"
 #include "Game/WorldManager.h"
 #include "Game/AI/AiUtil.h"
@@ -110,6 +116,149 @@ void cCameraManager::Shutdown()
 /**
  * Offset/Address/Size: 0x10CC | 0x801A7754 | size: 0x664
  */
+// ---------------------------------------------------------------------------
+// MOD (camera): a few extra gameplay angles, cycled with O and P on the
+// keyboard. They replace the view the normal gameplay camera produced, and
+// only that camera: goal cutscenes, kick-offs and Super Strikes keep theirs.
+// The stick already follows the camera (m_aJoystickRemap), so the controls
+// turn with the view for free.
+//
+// Presets are built from two points: the player on pad 1 (or the ball when
+// nobody is controlled) and the ball, plus the direction that player's team
+// attacks in (worked out from where its goalkeeper stands).
+// ---------------------------------------------------------------------------
+
+static const char* const kModCamNames[] = {
+    "game camera", "chase", "ball chase", "broadcast", "low replay"
+};
+static const int kModCamCount = 5;
+static int gModCamPreset = 0;
+static bool gModCamSnap = true;
+static nlVector3 gModCamEye;
+static nlVector3 gModCamAt;
+static float gModCamFwdX = 1.0f;
+static float gModCamFwdY = 0.0f;
+
+void ModCameraCycle(int dir)
+{
+    gModCamPreset = (gModCamPreset + dir + kModCamCount) % kModCamCount;
+    gModCamSnap = true;
+    OSReport("[camera] %d: %s\n", gModCamPreset, kModCamNames[gModCamPreset]);
+}
+
+static float ModCamCfg(const char* key, float def)
+{
+    return GetConfigFloat(Config::Global(), key, def);
+}
+
+static void ModCamSmooth(nlVector3& cur, const nlVector3& goal, float k)
+{
+    cur.x += (goal.x - cur.x) * k;
+    cur.y += (goal.y - cur.y) * k;
+    cur.z += (goal.z - cur.z) * k;
+}
+
+// Returns true and fills the view when a preset is active and the world is up.
+static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& cameraPosition)
+{
+    if (gModCamPreset == 0 || pCamera == NULL || pCamera->GetType() != eCameraType_Gameplay)
+    {
+        return false;
+    }
+    if (g_pBall == NULL || g_pTeams[0] == NULL || g_pTeams[1] == NULL)
+    {
+        return false;
+    }
+
+    nlVector3 ball = *g_pBall->GetDrawablePosition();
+
+    // Pad 1's player and the direction his team attacks in.
+    cGlobalPad* pad = cPadManager::GetPad(0);
+    cPlayer* pPlayer = NULL;
+    int team = 0;
+    for (int i = 0; i < 2 && pad != NULL; ++i)
+    {
+        pPlayer = g_pTeams[i]->GetControlledPlayer(pad);
+        if (pPlayer != NULL)
+        {
+            team = i;
+            break;
+        }
+    }
+    float attack = 1.0f;
+    cPlayer* pGoalie = g_pTeams[team]->m_pPlayers[4];
+    if (pGoalie != NULL)
+    {
+        attack = (pGoalie->m_v3Position.x > 0.0f) ? -1.0f : 1.0f;
+    }
+    nlVector3 focus = (pPlayer != NULL) ? pPlayer->m_v3Position : ball;
+
+    // Forward: mostly the attack direction, leaning toward the ball, smoothed.
+    float tbx = ball.x - focus.x;
+    float tby = ball.y - focus.y;
+    float tbl = sqrtf(tbx * tbx + tby * tby);
+    if (tbl > 0.5f) { tbx /= tbl; tby /= tbl; } else { tbx = 0.0f; tby = 0.0f; }
+    float lean = ModCamCfg("cam_ball_lean", 0.6f);
+    float fx = attack + tbx * lean;
+    float fy = tby * lean;
+    float fl = sqrtf(fx * fx + fy * fy);
+    if (fl < 0.001f) { fx = attack; fy = 0.0f; fl = 1.0f; }
+    fx /= fl; fy /= fl;
+    float turn = gModCamSnap ? 1.0f : ModCamCfg("cam_turn", 0.08f);
+    gModCamFwdX += (fx - gModCamFwdX) * turn;
+    gModCamFwdY += (fy - gModCamFwdY) * turn;
+    float gl = sqrtf(gModCamFwdX * gModCamFwdX + gModCamFwdY * gModCamFwdY);
+    if (gl > 0.001f) { gModCamFwdX /= gl; gModCamFwdY /= gl; }
+    fx = gModCamFwdX; fy = gModCamFwdY;
+
+    float dist = ModCamCfg("cam_distance", 10.0f);
+    float height = ModCamCfg("cam_height", 4.0f);
+    float ahead = ModCamCfg("cam_look_ahead", 6.0f);
+
+    nlVector3 eye, at;
+    switch (gModCamPreset)
+    {
+    case 1: // chase: behind the player, looking up the pitch toward the ball
+        nlVec3Set(eye, focus.x - fx * dist, focus.y - fy * dist, focus.z + height);
+        nlVec3Set(at, focus.x + fx * ahead, focus.y + fy * ahead, focus.z + 1.0f);
+        break;
+    case 2: // ball chase: behind the ball
+        nlVec3Set(eye, ball.x - fx * (dist + 2.0f), ball.y - fy * (dist + 2.0f), ball.z + height + 1.0f);
+        nlVec3Set(at, ball.x + fx * (ahead * 0.5f), ball.y + fy * (ahead * 0.5f), ball.z + 0.5f);
+        break;
+    case 3: // broadcast: from the touchline, tracking the ball along the pitch
+    {
+        float side = ModCamCfg("cam_broadcast_side", -1.0f);
+        float back = ModCamCfg("cam_broadcast_back", 42.0f);
+        float up = ModCamCfg("cam_broadcast_height", 16.0f);
+        nlVec3Set(eye, ball.x * 0.75f, side * back, up);
+        nlVec3Set(at, ball.x, ball.y * 0.5f, 1.0f);
+        break;
+    }
+    case 4: // low replay: the replay look, live
+    default:
+        nlVec3Set(eye, ball.x - fx * (dist * 0.7f), ball.y - fy * (dist * 0.7f), ball.z + height * 0.45f);
+        nlVec3Set(at, ball.x + fx * ahead, ball.y + fy * ahead, ball.z + 1.0f);
+        break;
+    }
+
+    if (gModCamSnap)
+    {
+        gModCamEye = eye;
+        gModCamAt = at;
+        gModCamSnap = false;
+    }
+    else
+    {
+        ModCamSmooth(gModCamEye, eye, ModCamCfg("cam_smooth", 0.15f));
+        ModCamSmooth(gModCamAt, at, ModCamCfg("cam_smooth", 0.15f));
+    }
+
+    glMatrixLookAt(matView, gModCamEye, gModCamAt, pCamera->mUpVector);
+    cameraPosition = gModCamEye;
+    return true;
+}
+
 void cCameraManager::Update(float fDeltaT)
 {
     nlVector3 v3TransTo;
@@ -204,6 +353,9 @@ void cCameraManager::Update(float fDeltaT)
             PeekCamera()->m_pFilter->Filter(m_matView, filteredViewNone);
             m_matView = filteredViewNone;
         }
+
+        // MOD (camera): a preset angle takes over the gameplay view here.
+        ModCameraApply(pCamera, m_matView, m_cameraPosition);
     }
 
     m_aJoystickRemap = (u16)(int)(nlATan2f(m_matView.m23, m_matView.m13) * 10430.378f);
