@@ -72,7 +72,9 @@ Nis::Nis(NisHeader& header, char* data, int size)
         {
             anim = cSAnim::Initialize(chunk);
             i = NisPlayer::Instance()->TargetToIndex(mTarget, numAnimations, mWinnerType);
-            if (NisPlayer::Instance()->mGoalScorerCharIndex >= 0 && mTarget == NIS_TARGET_WINNER_SIDEKICK)
+            // MOD (mixed teams): a borrowed captain celebrates himself, not the team's captain.
+            if (NisPlayer::Instance()->mGoalScorerCharIndex >= 0
+                && (mTarget == NIS_TARGET_WINNER_SIDEKICK || mTarget == NIS_TARGET_WINNER_CAPTAIN))
             {
                 int goalScorer = NisPlayer::Instance()->mGoalScorerCharIndex;
                 mMainCharacterIndex = goalScorer;
