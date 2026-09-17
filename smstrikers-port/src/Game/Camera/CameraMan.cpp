@@ -129,15 +129,17 @@ void cCameraManager::Shutdown()
 // ---------------------------------------------------------------------------
 
 static const char* const kModCamNames[] = {
-    "game camera", "chase", "ball chase", "broadcast", "low replay"
+    "game camera", "chase", "ball chase", "broadcast", "low replay", "wide chase"
 };
-static const int kModCamCount = 5;
+static const int kModCamCount = 6;
 static int gModCamPreset = 0;
 static bool gModCamSnap = true;
 static nlVector3 gModCamEye;
 static nlVector3 gModCamAt;
 static float gModCamFwdX = 1.0f;
 static float gModCamFwdY = 0.0f;
+static float gModCamYaw = 0.0f;   // orbit heading in the chase view, radians
+static float gModCamPitch = 0.0f; // orbit height offset in the chase view, -1..1
 
 void ModCameraCycle(int dir)
 {
@@ -159,7 +161,7 @@ static void ModCamSmooth(nlVector3& cur, const nlVector3& goal, float k)
 }
 
 // Returns true and fills the view when a preset is active and the world is up.
-static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& cameraPosition)
+static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& cameraPosition, float dt)
 {
     if (gModCamPreset == 0 || pCamera == NULL || pCamera->GetType() != eCameraType_Gameplay)
     {
@@ -211,6 +213,40 @@ static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& 
     if (gl > 0.001f) { gModCamFwdX /= gl; gModCamFwdY /= gl; }
     fx = gModCamFwdX; fy = gModCamFwdY;
 
+    // Chase view: the right stick orbits the camera around the player, like a
+    // modern third-person game. No ball tracking here; you steer the view.
+    bool orbit = (gModCamPreset == 1 || gModCamPreset == 5) && GetConfigBool(Config::Global(), "cam_orbit", true);
+    if (orbit)
+    {
+        if (gModCamSnap)
+        {
+            gModCamYaw = atan2f(fy, fx); // start facing the attack direction
+            gModCamPitch = 0.0f;
+        }
+        if (pad != NULL && dt > 0.0f)
+        {
+            float sx = pad->AnalogRightX();
+            float sy = pad->AnalogRightY();
+            float dead = ModCamCfg("cam_orbit_deadzone", 0.2f);
+            if (sx > dead || sx < -dead)
+            {
+                float spd = ModCamCfg("cam_orbit_speed", 150.0f) * 0.017453f; // deg/s -> rad/s
+                if (GetConfigBool(Config::Global(), "cam_orbit_invert_x", false)) { sx = -sx; }
+                gModCamYaw -= sx * spd * dt;
+            }
+            if (sy > dead || sy < -dead)
+            {
+                float vspd = ModCamCfg("cam_orbit_vertical_speed", 1.2f);
+                if (GetConfigBool(Config::Global(), "cam_orbit_invert_y", false)) { sy = -sy; }
+                gModCamPitch += sy * vspd * dt;
+                if (gModCamPitch > 1.0f) { gModCamPitch = 1.0f; }
+                if (gModCamPitch < -1.0f) { gModCamPitch = -1.0f; }
+            }
+        }
+        fx = cosf(gModCamYaw);
+        fy = sinf(gModCamYaw);
+    }
+
     float dist = ModCamCfg("cam_distance", 10.0f);
     float height = ModCamCfg("cam_height", 4.0f);
     float ahead = ModCamCfg("cam_look_ahead", 6.0f);
@@ -218,10 +254,27 @@ static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& 
     nlVector3 eye, at;
     switch (gModCamPreset)
     {
-    case 1: // chase: behind the player, looking up the pitch toward the ball
-        nlVec3Set(eye, focus.x - fx * dist, focus.y - fy * dist, focus.z + height);
+    case 1: // chase: behind the player; the right stick orbits it
+    case 5: // wide chase: the same, further back and higher
+    {
+        if (gModCamPreset == 5)
+        {
+            dist = ModCamCfg("cam_wide_distance", 18.0f);
+            height = ModCamCfg("cam_wide_height", 8.0f);
+            ahead = ModCamCfg("cam_wide_look_ahead", 8.0f);
+        }
+        float h = height;
+        if (orbit)
+        {
+            float hi = ModCamCfg("cam_orbit_height_max", 9.0f) * (gModCamPreset == 5 ? 2.0f : 1.0f);
+            float lo = ModCamCfg("cam_orbit_height_min", 1.5f) * (gModCamPreset == 5 ? 2.0f : 1.0f);
+            h = (gModCamPitch >= 0.0f) ? height + (hi - height) * gModCamPitch
+                                       : height + (height - lo) * gModCamPitch;
+        }
+        nlVec3Set(eye, focus.x - fx * dist, focus.y - fy * dist, focus.z + h);
         nlVec3Set(at, focus.x + fx * ahead, focus.y + fy * ahead, focus.z + 1.0f);
         break;
+    }
     case 2: // ball chase: behind the ball
         nlVec3Set(eye, ball.x - fx * (dist + 2.0f), ball.y - fy * (dist + 2.0f), ball.z + height + 1.0f);
         nlVec3Set(at, ball.x + fx * (ahead * 0.5f), ball.y + fy * (ahead * 0.5f), ball.z + 0.5f);
@@ -355,7 +408,7 @@ void cCameraManager::Update(float fDeltaT)
         }
 
         // MOD (camera): a preset angle takes over the gameplay view here.
-        ModCameraApply(pCamera, m_matView, m_cameraPosition);
+        ModCameraApply(pCamera, m_matView, m_cameraPosition, fDeltaT);
     }
 
     m_aJoystickRemap = (u16)(int)(nlATan2f(m_matView.m23, m_matView.m13) * 10430.378f);
