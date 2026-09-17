@@ -934,13 +934,18 @@ void Presentation::EventHandler(Event* event)
             inSuddenDeath = (g_pGame->m_eGameState == GS_OVERTIME);
 
             bool byCaptain;
-            if (gsd->uGoalType == 5)
+            cPlayer* pGoalScorer = (gsd->uGoalType == 5) ? gsd->pLastTouch[gsd->uTeamIndex] : gsd->pScorer;
+            byCaptain = pGoalScorer->IsCaptain();
+
+            // MOD (mixed teams): a captain celebrates as a captain wherever he plays,
+            // and every scorer celebrates with his own cutscene file.
+            if (GetConfigBool(Config::Global(), "mixed_teams", false) && pGoalScorer != NULL)
             {
-                byCaptain = gsd->pLastTouch[gsd->uTeamIndex]->IsCaptain();
-            }
-            else
-            {
-                byCaptain = gsd->pScorer->IsCaptain();
+                extern void NisSetScorerFilter(const char* name);
+                byCaptain = ::IsCaptain(pGoalScorer->m_eCharacterClass);
+                const char* nm = GetCharacterName(pGoalScorer->m_eCharacterClass);
+                eSidekickID sk = ConvertToSidekickID(nm);
+                NisSetScorerFilter(sk != SK_INVALID ? GetSidekickName(sk) : nm);
             }
 
             const char* filter = "high";
