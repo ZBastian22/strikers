@@ -1,4 +1,5 @@
 #include "Game/NisPlayer.h"
+#include "dolphin/os.h"
 #include <stdlib.h>
 #include "Game/Camera/CameraMan.h"
 #include "Game/Character.h"
@@ -341,6 +342,22 @@ void NisPlayer::Reset()
     cCameraManager::Remove(mCamera);
 }
 
+// MOD (mixed teams): the goal scorer's own cutscene. Winner cutscenes are
+// filtered by the team's registered captain or sidekick, so a borrowed
+// character would celebrate with somebody else's file. Presentation sets the
+// scorer's name here before a goal cutscene loads; it is consumed once.
+static char gNisScorerFilter[32];
+
+void NisSetScorerFilter(const char* name)
+{
+    if (name == NULL)
+    {
+        gNisScorerFilter[0] = 0;
+        return;
+    }
+    nlSNPrintf(gNisScorerFilter, 32, "%s", name);
+}
+
 /**
  * Offset/Address/Size: 0x2AD4 | 0x801177B0 | size: 0x1F8
  */
@@ -653,6 +670,10 @@ BasicString<char, Detail::TempStringAllocator> NisPlayer::GetTargetFilter(NisTar
 
     if (target == NIS_TARGET_WINNER_SIDEKICK)
     {
+        if (gNisScorerFilter[0] != 0)
+        {
+            return BasicString<char, Detail::TempStringAllocator>(gNisScorerFilter); // MOD (mixed teams)
+        }
         return BasicString<char, Detail::TempStringAllocator>(GetSidekickName(nlSingleton<GameInfoManager>::Instance()->GetSidekick((short)mWinnerSide[winnerType])));
     }
 
@@ -664,6 +685,10 @@ BasicString<char, Detail::TempStringAllocator> NisPlayer::GetTargetFilter(NisTar
 
     if (target == NIS_TARGET_WINNER_CAPTAIN)
     {
+        if (gNisScorerFilter[0] != 0)
+        {
+            return BasicString<char, Detail::TempStringAllocator>(gNisScorerFilter); // MOD (mixed teams)
+        }
         return BasicString<char, Detail::TempStringAllocator>(GetTeamName(nlSingleton<GameInfoManager>::Instance()->GetTeam((short)mWinnerSide[winnerType])));
     }
 
@@ -695,6 +720,14 @@ void NisPlayer::Load(const char* nisType, NisTarget target, NisUseStadiumOffset 
     mActive = true;
 
     BasicString<char, Detail::TempStringAllocator> filter = GetTargetFilter(target, winnerType);
+    if (target == NIS_TARGET_WINNER_SIDEKICK || target == NIS_TARGET_WINNER_CAPTAIN)
+    {
+        if (gNisScorerFilter[0] != 0)
+        {
+            OSReport("[mixed teams] goal cutscene for %s\n", gNisScorerFilter);
+        }
+        gNisScorerFilter[0] = 0; // MOD (mixed teams): one goal, one use
+    }
 
     if (filter == "myst_sidekick" && strstr(nisType, "goal_winner") != NULL)
     {
@@ -843,10 +876,8 @@ void NisPlayer::EventHandler(Event* event)
                 g_ForceDoubleBallTransition = 1;
             }
 
-            if (!goalScoredData->pLastTouch[goalScoredData->uTeamIndex]->IsCaptain())
-            {
-                mGoalScorerCharIndex = GetCharacterIndex(goalScoredData->pLastTouch[goalScoredData->uTeamIndex]);
-            }
+            // MOD (mixed teams): the scorer is always the cutscene's star, captain or not.
+            mGoalScorerCharIndex = GetCharacterIndex(goalScoredData->pLastTouch[goalScoredData->uTeamIndex]);
         }
     }
 
