@@ -5,6 +5,8 @@
 extern "C" unsigned long port_cam_swap(void*, unsigned long);
 #include "NL/vmath.h"
 #include "Game/ReplayManager.h"
+#include "Game/CharacterTemplate.h"
+#include "Game/Player.h"
 #include "Game/NisPlayer.h"
 #include "Game/Sys/audio.h"
 #include "Game/Sys/GCStream.h"
@@ -72,13 +74,22 @@ Nis::Nis(NisHeader& header, char* data, int size)
         {
             anim = cSAnim::Initialize(chunk);
             i = NisPlayer::Instance()->TargetToIndex(mTarget, numAnimations, mWinnerType);
-            // MOD (mixed teams): a borrowed captain celebrates himself, not the team's captain.
-            if (NisPlayer::Instance()->mGoalScorerCharIndex >= 0
-                && (mTarget == NIS_TARGET_WINNER_SIDEKICK || mTarget == NIS_TARGET_WINNER_CAPTAIN))
+            // MOD (mixed teams): the scorer is the star of every winner cutscene in
+            // his goal's sequence, captain or not; only the first animation of a
+            // file is re-aimed, the rest keep their own targets.
             {
+                extern int NisGetScorerIndex();
                 int goalScorer = NisPlayer::Instance()->mGoalScorerCharIndex;
-                mMainCharacterIndex = goalScorer;
-                i = goalScorer;
+                if (goalScorer < 0 && numAnimations == 0)
+                {
+                    goalScorer = NisGetScorerIndex();
+                }
+                if (goalScorer >= 0
+                    && (mTarget == NIS_TARGET_WINNER_SIDEKICK || mTarget == NIS_TARGET_WINNER_CAPTAIN))
+                {
+                    mMainCharacterIndex = goalScorer;
+                    i = goalScorer;
+                }
             }
             NisPlayer* player = NisPlayer::Instance();
             player->mGoalScorerCharIndex = -1;
@@ -100,6 +111,12 @@ Nis::Nis(NisHeader& header, char* data, int size)
             }
             if (i < 10)
             {
+                {
+                    const char* who = (g_pCharacters[i] != NULL)
+                        ? GetCharacterName(((cPlayer*)g_pCharacters[i])->m_eCharacterClass) : "?";
+                    OSReport("[mixed teams] nis: '%s' animation %d -> character %d (%s)\n",
+                             mHeader->name, numAnimations, i, who);
+                }
                 mBallId[i] = numAnimations;
                 cPN_SAnimController* controller = ::new (AllocateSAnimController()) cPN_SAnimController(anim, NULL, PM_HOLD, NULL, 0, false);
                 mCharacterControllers[i] = controller;
