@@ -300,7 +300,28 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
         TLInstance** headPtr = heads[i];
         if (headPtr != NULL && *headPtr == img)
         {
-            *headPtr = clone;
+            // If the cursor lives in this ring, it becomes the head instead,
+            // so the order is face, number, cursor. Otherwise the copy does.
+            TLInstance* cursor = onCaptainGrid
+                ? (TLInstance*)p->mCaptainGridComponents[side]->mHighliteComponent
+                : (TLInstance*)p->mSidekickGridComponents[side]->mHighliteComponent;
+            bool cursorHere = false;
+            TLInstance* r = clone->m_next;
+            for (int guard = 0; guard < 256 && r != NULL; ++guard)
+            {
+                if (r == cursor) { cursorHere = true; break; }
+                if (r == clone) { break; }
+                r = r->m_next;
+            }
+            if (cursorHere)
+            {
+                *headPtr = cursor;
+                headPtr = NULL; // the cursor keeps the head from now on
+            }
+            else
+            {
+                *headPtr = clone;
+            }
         }
         else
         {
@@ -331,6 +352,73 @@ static void PickerUnnumberFace(int side, int pickIdx)
         gPickerOverlays[swap->mOverlay[i]].mDying = true;
     }
     swap->mCount = 0;
+}
+
+// Coming back from the side-select screen rebuilds this screen, so the
+// picker's memory is empty while the sides are already locked in. The picks
+// are still in the settings; read them back so B can rewind properly.
+static bool PickerRestoreSide(IChooseCaptain* p, int side)
+{
+    if (gPickCount[side] >= 0)
+    {
+        return true;
+    }
+    if (p->mComponentState[side].mCurrentPhase != PHASE_READY || p->mHomeAwayTeam[side] == 8)
+    {
+        return false;
+    }
+    Config& cfg = Config::Global();
+    char szKey[16];
+    for (int k = 0; k < 3; ++k)
+    {
+        nlSNPrintf(szKey, 16, "team%d_slot%d", side + 1, k + 2);
+        BasicString<char, Detail::TempStringAllocator> v
+            = cfg.Get<BasicString<char, Detail::TempStringAllocator> >(szKey, BasicString<char, Detail::TempStringAllocator>(""));
+        if (v.c_str() == NULL || v.c_str()[0] == 0)
+        {
+            return false;
+        }
+        nlSNPrintf(gPickNames[side][k], 20, "%s", v.c_str());
+    }
+    gPickCount[side] = 3;
+    gPickedASidekick[side] = false;
+    for (int k = 0; k < 3; ++k)
+    {
+        if (ConvertToSidekickID(gPickNames[side][k]) != SK_INVALID)
+        {
+            gPickedASidekick[side] = true;
+            break;
+        }
+    }
+    OSReport("[mixed teams] picker: side %d picks restored (%s, %s, %s)\n", side,
+             gPickNames[side][0], gPickNames[side][1], gPickNames[side][2]);
+    return true;
+}
+
+// Put the numbers back on a side's faces (after the grid has been shown again).
+static void PickerRenumberSide(IChooseCaptain* p, int side)
+{
+    for (int k = 0; k < 4; ++k)
+    {
+        PickerUnnumberFace(side, k);
+    }
+    if (gPickCount[side] < 0)
+    {
+        return;
+    }
+    PickerNumberFace(p, side, 0, true, kPickerCaptCell[p->mHomeAwayTeam[side]]);
+    for (int k = 0; k < gPickCount[side]; ++k)
+    {
+        eTeamID t = ConvertToTeamID(gPickNames[side][k]);
+        if (t != TEAM_INVALID)
+        {
+            PickerNumberFace(p, side, k + 1, true, kPickerCaptCell[(int)t]);
+        }
+        else
+        {
+            PickerNumberFace(p, side, k + 1, false, PickerSidekickCell(ConvertToSidekickID(gPickNames[side][k])));
+        }
+    }
 }
 
 // B while locked in: back to the captain grid with the last teammate removed,
@@ -416,10 +504,17 @@ static void MixedPickerReset()
             gPickerSwap[i][k].mCount = 0;
         }
     }
-    if (gPickerOn)
+}
+
+// A fresh lineup for one side starts when its captain is picked.
+static void PickerClearSlots(int side)
+{
+    Config& cfg = Config::Global();
+    char szKey[16];
+    for (int k = 2; k <= 4; ++k)
     {
-        cfg.Set("team1_slot2", ""); cfg.Set("team1_slot3", ""); cfg.Set("team1_slot4", "");
-        cfg.Set("team2_slot2", ""); cfg.Set("team2_slot3", ""); cfg.Set("team2_slot4", "");
+        nlSNPrintf(szKey, 16, "team%d_slot%d", side + 1, k);
+        cfg.Set(szKey, "");
     }
 }
 
@@ -546,6 +641,7 @@ static bool MixedPickerConfirm(IChooseCaptain* p, int side)
         p->mCaptainGridComponents[side ^ 1]->mMapMenu->SetItemActive(cg->mMapMenu->GetSelectedItem(), false);
 
         count = 0;
+        PickerClearSlots(side);
         PickerNumberFace(p, side, 0, true, kPickerCaptCell[(int)sel]);
         FEAudio::PlayAnimAudioEvent("sfx_accept_no_screen_change", false);
         p->mLastCaptainSelectSoundStrPlayed[side] = (char*)FECharacterSound::PlayCaptainName(sel);
@@ -621,11 +717,11 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
     IChooseCaptain::ComponentState::Phase ph = p->mComponentState[side].mCurrentPhase;
     int& count = gPickCount[side];
 
-    if (ph == PHASE_READY && count == 3)
+    if (ph == PHASE_READY && (count == 3 || PickerRestoreSide(p, side)))
     {
         MixedPickerReadyToCaptainGrid(p, side);
         count = 2;
-        PickerUnnumberFace(side, 3);
+        PickerRenumberSide(p, side);
         return true;
     }
 
@@ -682,13 +778,14 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
     // Nothing picked on this side. In single player, with the other side locked
     // in, the game would rewind that side to its sidekick screen; rewind it to
     // the captain grid instead, with its last teammate removed.
-    if (p->mIsSinglePlayerInput && side == 1 && gPickCount[0] == 3
-        && p->mComponentState[0].mCurrentPhase == PHASE_READY)
+    if (p->mIsSinglePlayerInput && side == 1
+        && p->mComponentState[0].mCurrentPhase == PHASE_READY
+        && (gPickCount[0] == 3 || PickerRestoreSide(p, 0)))
     {
         p->mComponentState[1].GotoPreviousPhase(); // side 2 back to idle
         MixedPickerReadyToCaptainGrid(p, 0);
         gPickCount[0] = 2;
-        PickerUnnumberFace(0, 3);
+        PickerRenumberSide(p, 0);
         return true;
     }
 
