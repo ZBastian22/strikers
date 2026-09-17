@@ -260,6 +260,31 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
     int nImages = 0;
     PickerCollectImages(cell, NULL, images, heads, &nImages, 0);
 
+    float dz = (float)GetConfigInt(cfg, "picker_number_dz", 0);
+    bool forceTop = GetConfigBool(cfg, "picker_number_top", false);
+
+    // What the ring around the face looks like, for the log.
+    for (int i = 0; i < nImages; ++i)
+    {
+        TLInstance* img = images[i];
+        feVector3& ip = img->GetPosition();
+        OSReport("[mixed teams] picker:   face '%s' type %d at (%.1f, %.1f, %.1f)%s\n",
+                 img->m_szName, (int)img->m_type, ip.f.x, ip.f.y, ip.f.z,
+                 (heads[i] != NULL && *heads[i] == img) ? " [ring head]" : "");
+        if (heads[i] != NULL && *heads[i] != NULL)
+        {
+            TLInstance* r = (*heads[i])->m_next;
+            for (int guard = 0; guard < 24 && r != NULL; ++guard)
+            {
+                feVector3& rp = r->GetPosition();
+                OSReport("[mixed teams] picker:     ring: '%s' type %d z=%.1f%s\n",
+                         r->m_szName, (int)r->m_type, rp.f.z, (r == *heads[i]) ? " [head, drawn last]" : "");
+                if (r == *heads[i]) break;
+                r = r->m_next;
+            }
+        }
+    }
+
     for (int i = 0; i < nImages; ++i)
     {
         int slot = -1;
@@ -289,7 +314,7 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
         feVector3& sc = img->GetScale();
         feVector3& ps = img->GetPosition();
         clone->SetAssetScale(sc.f.x * scale * (flip ? -1.0f : 1.0f), sc.f.y * scale, sc.f.z);
-        clone->SetAssetPosition(ps.f.x + dx, ps.f.y + dy, ps.f.z);
+        clone->SetAssetPosition(ps.f.x + dx, ps.f.y + dy, ps.f.z + dz);
         // Into the ring right after the face. The renderer draws a ring starting
         // after its head and finishing with the head, so if the face is the
         // head the copy takes over as head: the face still draws just before it.
@@ -313,7 +338,7 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
                 if (r == clone) { break; }
                 r = r->m_next;
             }
-            if (cursorHere)
+            if (cursorHere && !forceTop)
             {
                 *headPtr = cursor;
                 headPtr = NULL; // the cursor keeps the head from now on
@@ -322,6 +347,8 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
             {
                 *headPtr = clone;
             }
+            OSReport("[mixed teams] picker:   copy placed after the face; ring head is now %s\n",
+                     cursorHere && !forceTop ? "the cursor" : "the copy");
         }
         else
         {
@@ -365,6 +392,8 @@ static bool PickerRestoreSide(IChooseCaptain* p, int side)
     }
     if (p->mComponentState[side].mCurrentPhase != PHASE_READY || p->mHomeAwayTeam[side] == 8)
     {
+        OSReport("[mixed teams] picker: side %d not restorable (phase %d, team %d)\n",
+                 side, (int)p->mComponentState[side].mCurrentPhase, p->mHomeAwayTeam[side]);
         return false;
     }
     Config& cfg = Config::Global();
@@ -376,6 +405,7 @@ static bool PickerRestoreSide(IChooseCaptain* p, int side)
             = cfg.Get<BasicString<char, Detail::TempStringAllocator> >(szKey, BasicString<char, Detail::TempStringAllocator>(""));
         if (v.c_str() == NULL || v.c_str()[0] == 0)
         {
+            OSReport("[mixed teams] picker: side %d not restorable, %s is empty\n", side, szKey);
             return false;
         }
         nlSNPrintf(gPickNames[side][k], 20, "%s", v.c_str());
@@ -709,6 +739,10 @@ static bool MixedPickerConfirm(IChooseCaptain* p, int side)
 // B, with the picker on: un-pick the last choice. Returns true when handled.
 static bool MixedPickerBack(IChooseCaptain* p, int side)
 {
+    OSReport("[mixed teams] picker: B side=%d on=%d single=%d phases=%d/%d counts=%d/%d\n",
+             side, MixedPickerOn() ? 1 : 0, p->mIsSinglePlayerInput ? 1 : 0,
+             (int)p->mComponentState[0].mCurrentPhase, (int)p->mComponentState[1].mCurrentPhase,
+             gPickCount[0], gPickCount[1]);
     if (!MixedPickerOn() || side < 0)
     {
         return false;
