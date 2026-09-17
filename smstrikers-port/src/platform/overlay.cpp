@@ -624,6 +624,18 @@ void PortOverlayHandleKey(int scancode, int down)
     case SDL_SCANCODE_F1:
         PortOverlayToggleMenu();
         break;
+    case SDL_SCANCODE_O: // MOD (camera): previous preset
+    {
+        extern void ModCameraCycle(int dir);
+        ModCameraCycle(-1);
+        break;
+    }
+    case SDL_SCANCODE_P: // MOD (camera): next preset
+    {
+        extern void ModCameraCycle(int dir);
+        ModCameraCycle(1);
+        break;
+    }
     case SDL_SCANCODE_F2:
         PortOverlayInit();
         s_enabled = !s_enabled;
