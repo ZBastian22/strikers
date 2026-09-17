@@ -47,6 +47,7 @@ struct PickerOverlay
 {
     TLInstance* mClone;     // the number picture, linked into the cell's draw ring
     FEImage* mAsset;        // its private picture asset
+    TLInstance** mHeadPtr;  // the ring's head pointer, if the copy became the head
     float mAlpha;           // 0..1
     bool mDying;            // fading out, then unlinked
 };
@@ -108,6 +109,10 @@ static void PickerUnlinkOverlay(PickerOverlay* o)
         return;
     }
     TLInstance* c = o->mClone;
+    if (o->mHeadPtr != NULL && *o->mHeadPtr == c)
+    {
+        *o->mHeadPtr = c->m_prev; // the face takes the head back
+    }
     if (c->m_prev != NULL) { c->m_prev->m_next = c->m_next; }
     if (c->m_next != NULL) { c->m_next->m_prev = c->m_prev; }
     nlFree(c);
@@ -161,8 +166,9 @@ static void PickerDestroyOverlays()
     }
 }
 
-// Collect every picture inside a cell, across all of its looks.
-static void PickerCollectImages(TLInstance* inst, TLInstance** out, int* count, int depth)
+// Collect every picture inside a cell, across all of its looks, along with
+// the head pointer of the ring each one sits in.
+static void PickerCollectImages(TLInstance* inst, TLInstance** headPtr, TLInstance** out, TLInstance*** outHead, int* count, int depth)
 {
     if (inst == NULL || depth > 6 || *count >= kPickerMaxFaces)
     {
@@ -170,6 +176,7 @@ static void PickerCollectImages(TLInstance* inst, TLInstance** out, int* count, 
     }
     if (inst->m_type == TLAT_IMAGE)
     {
+        outHead[*count] = headPtr;
         out[(*count)++] = inst;
     }
     else if (inst->m_type == TLAT_COMPONENT && inst->m_component != NULL && inst->m_component->pChildren != NULL)
@@ -184,8 +191,9 @@ static void PickerCollectImages(TLInstance* inst, TLInstance** out, int* count, 
                 TLInstance* ic = ihead;
                 for (int g2 = 0; g2 < 64; ++g2)
                 {
-                    PickerCollectImages(ic, out, count, depth + 1);
-                    ic = ic->m_next;
+                    TLInstance* nextc = ic->m_next;
+                    PickerCollectImages(ic, &slide->m_instances, out, outHead, count, depth + 1);
+                    ic = nextc;
                     if (ic == ihead || ic == NULL) break;
                 }
             }
@@ -199,8 +207,9 @@ static void PickerCollectImages(TLInstance* inst, TLInstance** out, int* count, 
         TLInstance* c = head;
         for (int guard = 0; guard < 64; ++guard)
         {
-            PickerCollectImages(c, out, count, depth + 1);
-            c = c->m_next;
+            TLInstance* nextc = c->m_next;
+            PickerCollectImages(c, &inst->pChildren, out, outHead, count, depth + 1);
+            c = nextc;
             if (c == head || c == NULL) break;
         }
     }
@@ -247,8 +256,9 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
     }
 
     TLInstance* images[kPickerMaxFaces];
+    TLInstance** heads[kPickerMaxFaces];
     int nImages = 0;
-    PickerCollectImages(cell, images, &nImages, 0);
+    PickerCollectImages(cell, NULL, images, heads, &nImages, 0);
 
     for (int i = 0; i < nImages; ++i)
     {
@@ -280,14 +290,27 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
         feVector3& ps = img->GetPosition();
         clone->SetAssetScale(sc.f.x * scale * (flip ? -1.0f : 1.0f), sc.f.y * scale, sc.f.z);
         clone->SetAssetPosition(ps.f.x + dx, ps.f.y + dy, ps.f.z);
+        // Into the ring right after the face. The renderer draws a ring starting
+        // after its head and finishing with the head, so if the face is the
+        // head the copy takes over as head: the face still draws just before it.
         clone->m_next = img->m_next;
         clone->m_prev = img;
         if (img->m_next != NULL) { img->m_next->m_prev = clone; }
         img->m_next = clone;
+        TLInstance** headPtr = heads[i];
+        if (headPtr != NULL && *headPtr == img)
+        {
+            *headPtr = clone;
+        }
+        else
+        {
+            headPtr = NULL;
+        }
 
         PickerOverlay* o = &gPickerOverlays[slot];
         o->mClone = clone;
         o->mAsset = asset;
+        o->mHeadPtr = headPtr;
         o->mAlpha = 0.0f;
         o->mDying = false;
         PickerSetAlpha(o);
@@ -653,6 +676,19 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
         {
             FEAudio::PlayAnimAudioEvent("sfx_back_no_screen_change", false);
         }
+        return true;
+    }
+
+    // Nothing picked on this side. In single player, with the other side locked
+    // in, the game would rewind that side to its sidekick screen; rewind it to
+    // the captain grid instead, with its last teammate removed.
+    if (p->mIsSinglePlayerInput && side == 1 && gPickCount[0] == 3
+        && p->mComponentState[0].mCurrentPhase == PHASE_READY)
+    {
+        p->mComponentState[1].GotoPreviousPhase(); // side 2 back to idle
+        MixedPickerReadyToCaptainGrid(p, 0);
+        gPickCount[0] = 2;
+        PickerUnnumberFace(0, 3);
         return true;
     }
 
