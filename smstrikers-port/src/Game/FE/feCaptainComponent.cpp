@@ -31,40 +31,42 @@ static int gPickCount[2];          // -1 = captain not chosen yet, 0..3 = teamma
 static char gPickNames[2][3][20];
 static bool gPickedASidekick[2];
 
-// The pick numbers drawn over chosen faces. A grid cell is a small container
-// with one or more pictures inside (one per look). For each of those, a copy
-// of the picture is placed right after it in the draw order, pointing at the
-// number glyph, so the number draws on top of the face rather than replacing
-// it. Numbers fade in when placed and fade out when B rewinds, and every
-// copy is removed when the screen is left.
-extern unsigned long MixedPickerDigitTexture(int digit);
-static FETextureResource gPickerDigitRes[5];
+// Picked faces are tinted in the picked character's colour, the way the game
+// blacks out a taken captain (the face's own colour multiplied down): Mario
+// goes red, Luigi green, Wario yellow. A sidekick takes the team's colour.
+// Tints fade in when placed and fade out when B rewinds, and every face is
+// restored when the screen is left.
 
-enum { kPickerMaxFaces = 8, kPickerMaxOverlays = 64 };
 static const float kPickerFadeTime = 0.2f;
 
-struct PickerOverlay
+struct PickerTint
 {
-    TLInstance* mClone;     // the number picture, linked into the cell's draw ring
-    FEImage* mAsset;        // its private picture asset
-    TLInstance** mHeadPtr;  // the ring's head pointer, if the copy became the head
-    float mAlpha;           // 0..1
-    bool mDying;            // fading out, then unlinked
+    TLInstance* mIcon;   // the face on the grid
+    nlColour mOriginal;  // its colour before the tint
+    nlColour mTarget;    // the character's colour
+    float mT;            // 0 = original, 1 = fully tinted
+    bool mDying;         // fading back to the original, then dropped
 };
-static PickerOverlay gPickerOverlays[kPickerMaxOverlays];
-
-struct PickerFaceSwap
-{
-    int mCount;
-    int mOverlay[kPickerMaxFaces]; // indices into gPickerOverlays
-};
-static PickerFaceSwap gPickerSwap[2][4]; // [side][pick 0=captain,1..3=teammates]
+static PickerTint gPickerTints[2][4]; // [side][pick 0=captain,1..3=teammates]
 
 // Indexed by eTeamID: DAISY, DK, LUIGI, MARIO, PEACH, WALUIGI, WARIO, YOSHI, MYSTERY.
 static const char* const kPickerCaptCell[9] = {
     "choose_capt_daisy", "choose_capt_dk", "choose_capt_luigi", "choose_capt_mario",
     "choose_capt_peach", "choose_capt_waluigi", "choose_capt_wario", "choose_capt_yoshi",
     "choose_capt_super",
+};
+
+// The captains' colours, same order.
+static const unsigned char kPickerTeamRGB[9][3] = {
+    { 255, 150,  40 }, // Daisy, orange
+    { 150,  90,  40 }, // Donkey Kong, brown
+    {  60, 210,  60 }, // Luigi, green
+    { 255,  50,  50 }, // Mario, red
+    { 255, 130, 210 }, // Peach, pink
+    { 170,  70, 230 }, // Waluigi, purple
+    { 250, 225,  40 }, // Wario, yellow
+    {  90, 200,  70 }, // Yoshi, green
+    { 255, 255, 255 }, // mystery
 };
 
 static const char* PickerSidekickCell(eSidekickID sk)
@@ -79,170 +81,91 @@ static const char* PickerSidekickCell(eSidekickID sk)
     }
 }
 
-// The number picture: the game's own controller number from fe/fe.glt when
-// it is resident, else the gold digit built in memory.
-static unsigned long PickerDigitTexture(int digit)
+static void PickerApplyTint(PickerTint* t)
 {
-    static const char* const kNames[5] = {
-        NULL, "fe/controller_1_indicator", "fe/controller_2_indicator",
-        "fe/controller_3_indicator", "fe/controller_4_indicator" };
-    unsigned long tex = glGetTexture(kNames[digit]);
-    if (glTextureLoad(tex))
+    nlColour c;
+    for (int i = 0; i < 3; ++i)
     {
-        return tex;
+        float v = t->mOriginal.c[i] + (t->mTarget.c[i] - t->mOriginal.c[i]) * t->mT;
+        c.c[i] = (unsigned char)(v < 0.0f ? 0 : (v > 255.0f ? 255 : v));
     }
-    return MixedPickerDigitTexture(digit);
+    c.c[3] = t->mOriginal.c[3];
+    t->mIcon->SetAssetColour(c);
 }
 
-static void PickerSetAlpha(PickerOverlay* o)
+// Called every frame: run the fades, and let faded-out tints go.
+static void PickerTickTints(float dt)
 {
-    nlColour c = o->mClone->GetAssetColour();
-    int a = (int)(o->mAlpha * 255.0f);
-    c.c[3] = (unsigned char)(a < 0 ? 0 : (a > 255 ? 255 : a));
-    o->mClone->SetAssetColour(c);
-}
-
-static void PickerUnlinkOverlay(PickerOverlay* o)
-{
-    if (o->mClone == NULL)
-    {
-        return;
-    }
-    TLInstance* c = o->mClone;
-    if (o->mHeadPtr != NULL && *o->mHeadPtr == c)
-    {
-        *o->mHeadPtr = c->m_prev; // the face takes the head back
-    }
-    if (c->m_prev != NULL) { c->m_prev->m_next = c->m_next; }
-    if (c->m_next != NULL) { c->m_next->m_prev = c->m_prev; }
-    nlFree(c);
-    nlFree(o->mAsset);
-    o->mClone = NULL;
-    o->mAsset = NULL;
-    o->mDying = false;
-}
-
-// Called every frame: run the fades, and drop overlays that faded out.
-static void PickerTickOverlays(float dt)
-{
-    for (int i = 0; i < kPickerMaxOverlays; ++i)
-    {
-        PickerOverlay* o = &gPickerOverlays[i];
-        if (o->mClone == NULL)
-        {
-            continue;
-        }
-        if (o->mDying)
-        {
-            o->mAlpha -= dt / kPickerFadeTime;
-            if (o->mAlpha <= 0.0f)
-            {
-                PickerUnlinkOverlay(o);
-                continue;
-            }
-        }
-        else if (o->mAlpha < 1.0f)
-        {
-            o->mAlpha += dt / kPickerFadeTime;
-            if (o->mAlpha > 1.0f) { o->mAlpha = 1.0f; }
-        }
-        PickerSetAlpha(o);
-    }
-}
-
-// Leaving the screen: every copy goes at once, so nothing outlives the art.
-static void PickerDestroyOverlays()
-{
-    for (int i = 0; i < kPickerMaxOverlays; ++i)
-    {
-        PickerUnlinkOverlay(&gPickerOverlays[i]);
-    }
-    for (int i = 0; i < 2; ++i)
+    for (int side = 0; side < 2; ++side)
     {
         for (int k = 0; k < 4; ++k)
         {
-            gPickerSwap[i][k].mCount = 0;
-        }
-    }
-}
-
-// Collect every picture inside a cell, across all of its looks, along with
-// the head pointer of the ring each one sits in.
-static void PickerCollectImages(TLInstance* inst, TLInstance** headPtr, TLInstance** out, TLInstance*** outHead, int* count, int depth)
-{
-    if (inst == NULL || depth > 6 || *count >= kPickerMaxFaces)
-    {
-        return;
-    }
-    if (inst->m_type == TLAT_IMAGE)
-    {
-        outHead[*count] = headPtr;
-        out[(*count)++] = inst;
-    }
-    else if (inst->m_type == TLAT_COMPONENT && inst->m_component != NULL && inst->m_component->pChildren != NULL)
-    {
-        TLSlide* head = inst->m_component->pChildren;
-        TLSlide* slide = head;
-        for (int guard = 0; guard < 32; ++guard)
-        {
-            if (slide->m_instances != NULL)
+            PickerTint* t = &gPickerTints[side][k];
+            if (t->mIcon == NULL)
             {
-                TLInstance* ihead = slide->m_instances;
-                TLInstance* ic = ihead;
-                for (int g2 = 0; g2 < 64; ++g2)
+                continue;
+            }
+            if (t->mDying)
+            {
+                t->mT -= dt / kPickerFadeTime;
+                if (t->mT <= 0.0f)
                 {
-                    TLInstance* nextc = ic->m_next;
-                    PickerCollectImages(ic, &slide->m_instances, out, outHead, count, depth + 1);
-                    ic = nextc;
-                    if (ic == ihead || ic == NULL) break;
+                    t->mIcon->SetAssetColour(t->mOriginal);
+                    t->mIcon = NULL;
+                    continue;
                 }
             }
-            slide = slide->m_next;
-            if (slide == head || slide == NULL) break;
-        }
-    }
-    if (inst->pChildren != NULL)
-    {
-        TLInstance* head = inst->pChildren;
-        TLInstance* c = head;
-        for (int guard = 0; guard < 64; ++guard)
-        {
-            TLInstance* nextc = c->m_next;
-            PickerCollectImages(c, &inst->pChildren, out, outHead, count, depth + 1);
-            c = nextc;
-            if (c == head || c == NULL) break;
+            else if (t->mT < 1.0f)
+            {
+                t->mT += dt / kPickerFadeTime;
+                if (t->mT > 1.0f) { t->mT = 1.0f; }
+            }
+            PickerApplyTint(t);
         }
     }
 }
 
-// Cover a face with a pick number. pickIdx 0 is the captain (digit 1).
-static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCaptainGrid, const char* cellName)
+// Leaving the screen: every face back to its own colour at once.
+static void PickerRestoreAllTints()
 {
-    PickerFaceSwap* swap = &gPickerSwap[side][pickIdx];
-    swap->mCount = 0;
+    for (int side = 0; side < 2; ++side)
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            PickerTint* t = &gPickerTints[side][k];
+            if (t->mIcon != NULL)
+            {
+                t->mIcon->SetAssetColour(t->mOriginal);
+                t->mIcon = NULL;
+            }
+        }
+    }
+}
+
+// Tint a face for pick pickIdx (0 = captain) in charName's colour.
+static void PickerTintFace(IChooseCaptain* p, int side, int pickIdx, bool onCaptainGrid, const char* cellName, const char* charName)
+{
+    PickerTint* t = &gPickerTints[side][pickIdx];
+    if (t->mIcon != NULL)
+    {
+        t->mIcon->SetAssetColour(t->mOriginal);
+        t->mIcon = NULL;
+    }
     if (cellName == NULL)
     {
         return;
     }
 
-    unsigned long tex = PickerDigitTexture(pickIdx + 1);
-    if (tex == (unsigned long)-1)
+    // The character's colour: a captain's own, or the team's for a sidekick.
+    eTeamID team = ConvertToTeamID(charName);
+    if (team == TEAM_INVALID || team == TEAM_MYSTERY)
+    {
+        team = (eTeamID)p->mHomeAwayTeam[side];
+    }
+    if (team < 0 || team > 8)
     {
         return;
     }
-    gPickerDigitRes[pickIdx + 1].m_glTextureHandle = tex;
-    gPickerDigitRes[pickIdx + 1].m_bValid = 1;
-
-    // Tuning from the mods folder, so size and position can be dialled in
-    // without a rebuild: picker_number_scale (percent), picker_number_flip,
-    // picker_number_dx / picker_number_dy (in the menu's own units).
-    Config& cfg = Config::Global();
-    float scale = GetConfigInt(cfg, "picker_number_scale", 100) / 100.0f;
-    // The opponent's grid is a mirror image of yours, so the number is
-    // mirrored back there. picker_number_flip swaps that if the art disagrees.
-    bool flip = (side == 1) != GetConfigBool(cfg, "picker_number_flip", false);
-    float dx = (float)GetConfigInt(cfg, "picker_number_dx", 0);
-    float dy = (float)GetConfigInt(cfg, "picker_number_dy", 0);
 
     TLComponentInstance* grid = onCaptainGrid
         ? p->mCaptainGridComponents[side]->mParentComponent
@@ -255,130 +178,21 @@ static void PickerNumberFace(IChooseCaptain* p, int side, int pickIdx, bool onCa
         return;
     }
 
-    TLInstance* images[kPickerMaxFaces];
-    TLInstance** heads[kPickerMaxFaces];
-    int nImages = 0;
-    PickerCollectImages(cell, NULL, images, heads, &nImages, 0);
-
-    float dz = (float)GetConfigInt(cfg, "picker_number_dz", 0);
-    bool forceTop = GetConfigBool(cfg, "picker_number_top", false);
-
-    // What the ring around the face looks like, for the log.
-    for (int i = 0; i < nImages; ++i)
-    {
-        TLInstance* img = images[i];
-        feVector3& ip = img->GetPosition();
-        OSReport("[mixed teams] picker:   face '%s' type %d at (%.1f, %.1f, %.1f)%s\n",
-                 img->m_szName, (int)img->m_type, ip.f.x, ip.f.y, ip.f.z,
-                 (heads[i] != NULL && *heads[i] == img) ? " [ring head]" : "");
-        if (heads[i] != NULL && *heads[i] != NULL)
-        {
-            TLInstance* r = (*heads[i])->m_next;
-            for (int guard = 0; guard < 24 && r != NULL; ++guard)
-            {
-                feVector3& rp = r->GetPosition();
-                OSReport("[mixed teams] picker:     ring: '%s' type %d z=%.1f%s\n",
-                         r->m_szName, (int)r->m_type, rp.f.z, (r == *heads[i]) ? " [head, drawn last]" : "");
-                if (r == *heads[i]) break;
-                r = r->m_next;
-            }
-        }
-    }
-
-    for (int i = 0; i < nImages; ++i)
-    {
-        int slot = -1;
-        for (int k = 0; k < kPickerMaxOverlays; ++k)
-        {
-            if (gPickerOverlays[k].mClone == NULL) { slot = k; break; }
-        }
-        if (slot < 0)
-        {
-            break;
-        }
-        TLInstance* img = images[i];
-
-        // A copy of the face picture, pointing at the number instead.
-        FEImage* asset = (FEImage*)nlMalloc(sizeof(FEImage), 8, false);
-        memcpy(asset, img->m_component, sizeof(FEImage));
-        asset->m_pFeTextureResource = &gPickerDigitRes[pickIdx + 1];
-
-        TLImageInstance* clone = (TLImageInstance*)nlMalloc(sizeof(TLImageInstance), 8, false);
-        memcpy(clone, img, sizeof(TLImageInstance));
-        clone->m_component = (TLComponent*)asset;
-        clone->pChildren = NULL;
-        clone->m_hash = nlStringLowerHash("picker_number");
-        nlSNPrintf(clone->m_szName, 32, "picker_number");
-
-        // Same place as the face, then the tuning, then drawn right after it.
-        feVector3& sc = img->GetScale();
-        feVector3& ps = img->GetPosition();
-        clone->SetAssetScale(sc.f.x * scale * (flip ? -1.0f : 1.0f), sc.f.y * scale, sc.f.z);
-        clone->SetAssetPosition(ps.f.x + dx, ps.f.y + dy, ps.f.z + dz);
-        // Into the ring right after the face. The renderer draws a ring starting
-        // after its head and finishing with the head, so if the face is the
-        // head the copy takes over as head: the face still draws just before it.
-        clone->m_next = img->m_next;
-        clone->m_prev = img;
-        if (img->m_next != NULL) { img->m_next->m_prev = clone; }
-        img->m_next = clone;
-        TLInstance** headPtr = heads[i];
-        if (headPtr != NULL && *headPtr == img)
-        {
-            // If the cursor lives in this ring, it becomes the head instead,
-            // so the order is face, number, cursor. Otherwise the copy does.
-            TLInstance* cursor = onCaptainGrid
-                ? (TLInstance*)p->mCaptainGridComponents[side]->mHighliteComponent
-                : (TLInstance*)p->mSidekickGridComponents[side]->mHighliteComponent;
-            bool cursorHere = false;
-            TLInstance* r = clone->m_next;
-            for (int guard = 0; guard < 256 && r != NULL; ++guard)
-            {
-                if (r == cursor) { cursorHere = true; break; }
-                if (r == clone) { break; }
-                r = r->m_next;
-            }
-            if (cursorHere && !forceTop)
-            {
-                *headPtr = cursor;
-                headPtr = NULL; // the cursor keeps the head from now on
-            }
-            else
-            {
-                *headPtr = clone;
-            }
-            OSReport("[mixed teams] picker:   copy placed after the face; ring head is now %s\n",
-                     cursorHere && !forceTop ? "the cursor" : "the copy");
-        }
-        else
-        {
-            headPtr = NULL;
-        }
-
-        PickerOverlay* o = &gPickerOverlays[slot];
-        o->mClone = clone;
-        o->mAsset = asset;
-        o->mHeadPtr = headPtr;
-        o->mAlpha = 0.0f;
-        o->mDying = false;
-        PickerSetAlpha(o);
-        swap->mOverlay[swap->mCount++] = slot;
-    }
-    OSReport("[mixed teams] picker: %d picture(s) in %s numbered %d (%s, scale %d%%%s)\n",
-             swap->mCount, cellName, pickIdx + 1,
-             (tex == MixedPickerDigitTexture(pickIdx + 1)) ? "built-in digit" : "game glyph",
-             (int)(scale * 100.0f), flip ? ", flipped" : "");
+    t->mIcon = cell;
+    t->mOriginal = cell->m_component->GetColour();
+    t->mTarget.c[0] = kPickerTeamRGB[team][0];
+    t->mTarget.c[1] = kPickerTeamRGB[team][1];
+    t->mTarget.c[2] = kPickerTeamRGB[team][2];
+    t->mTarget.c[3] = t->mOriginal.c[3];
+    t->mT = 0.0f;
+    t->mDying = false;
+    OSReport("[mixed teams] picker: %s tinted in %s colours (pick %d)\n", cellName, GetTeamName(team), pickIdx + 1);
 }
 
-// Start the number fading out; it is unlinked once invisible.
-static void PickerUnnumberFace(int side, int pickIdx)
+// Start a tint fading back to the face's own colour.
+static void PickerUntintFace(int side, int pickIdx)
 {
-    PickerFaceSwap* swap = &gPickerSwap[side][pickIdx];
-    for (int i = 0; i < swap->mCount; ++i)
-    {
-        gPickerOverlays[swap->mOverlay[i]].mDying = true;
-    }
-    swap->mCount = 0;
+    gPickerTints[side][pickIdx].mDying = true;
 }
 
 // Coming back from the side-select screen rebuilds this screen, so the
@@ -425,28 +239,29 @@ static bool PickerRestoreSide(IChooseCaptain* p, int side)
     return true;
 }
 
-// Put the numbers back on a side's faces (after the grid has been shown again).
-static void PickerRenumberSide(IChooseCaptain* p, int side)
+// Put the tints back on a side's faces (after the grid has been shown again).
+static void PickerRetintSide(IChooseCaptain* p, int side)
 {
     for (int k = 0; k < 4; ++k)
     {
-        PickerUnnumberFace(side, k);
+        PickerUntintFace(side, k);
     }
     if (gPickCount[side] < 0)
     {
         return;
     }
-    PickerNumberFace(p, side, 0, true, kPickerCaptCell[p->mHomeAwayTeam[side]]);
+    const char* captain = GetTeamName((eTeamID)p->mHomeAwayTeam[side]);
+    PickerTintFace(p, side, 0, true, kPickerCaptCell[p->mHomeAwayTeam[side]], captain);
     for (int k = 0; k < gPickCount[side]; ++k)
     {
         eTeamID t = ConvertToTeamID(gPickNames[side][k]);
         if (t != TEAM_INVALID)
         {
-            PickerNumberFace(p, side, k + 1, true, kPickerCaptCell[(int)t]);
+            PickerTintFace(p, side, k + 1, true, kPickerCaptCell[(int)t], gPickNames[side][k]);
         }
         else
         {
-            PickerNumberFace(p, side, k + 1, false, PickerSidekickCell(ConvertToSidekickID(gPickNames[side][k])));
+            PickerTintFace(p, side, k + 1, false, PickerSidekickCell(ConvertToSidekickID(gPickNames[side][k])), gPickNames[side][k]);
         }
     }
 }
@@ -522,16 +337,11 @@ static void MixedPickerReset()
     gPickerOn = GetConfigBool(cfg, "mixed_teams", false) && GetConfigBool(cfg, "mixed_picker", false);
     gPickCount[0] = gPickCount[1] = -1;
     gPickedASidekick[0] = gPickedASidekick[1] = false;
-    for (int i = 0; i < kPickerMaxOverlays; ++i)
-    {
-        gPickerOverlays[i].mClone = NULL; // fresh scene: any old copy went with the old art
-        gPickerOverlays[i].mAsset = NULL;
-    }
     for (int i = 0; i < 2; ++i)
     {
         for (int k = 0; k < 4; ++k)
         {
-            gPickerSwap[i][k].mCount = 0;
+            gPickerTints[i][k].mIcon = NULL; // fresh scene, fresh faces
         }
     }
 }
@@ -672,7 +482,7 @@ static bool MixedPickerConfirm(IChooseCaptain* p, int side)
 
         count = 0;
         PickerClearSlots(side);
-        PickerNumberFace(p, side, 0, true, kPickerCaptCell[(int)sel]);
+        PickerTintFace(p, side, 0, true, kPickerCaptCell[(int)sel], GetTeamName(sel));
         FEAudio::PlayAnimAudioEvent("sfx_accept_no_screen_change", false);
         p->mLastCaptainSelectSoundStrPlayed[side] = (char*)FECharacterSound::PlayCaptainName(sel);
         OSReport("[mixed teams] picker: side %d captain = %s\n", side, GetTeamName(sel));
@@ -724,7 +534,7 @@ static bool MixedPickerConfirm(IChooseCaptain* p, int side)
         }
     }
 
-    PickerNumberFace(p, side, count + 1, onCaptainGrid, cell);
+    PickerTintFace(p, side, count + 1, onCaptainGrid, cell, nm);
     nlSNPrintf(gPickNames[side][count], 20, "%s", nm);
     count++;
     FEAudio::PlayAnimAudioEvent("sfx_accept_no_screen_change", false);
@@ -755,7 +565,7 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
     {
         MixedPickerReadyToCaptainGrid(p, side);
         count = 2;
-        PickerRenumberSide(p, side);
+        PickerRetintSide(p, side);
         return true;
     }
 
@@ -767,7 +577,7 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
     if (count > 0)
     {
         count--;
-        PickerUnnumberFace(side, count + 1);
+        PickerUntintFace(side, count + 1);
         if (gPickedASidekick[side])
         {
             // Recount: does any remaining pick still name a sidekick?
@@ -795,7 +605,7 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
     {
         // Un-choose the captain himself.
         count = -1;
-        PickerUnnumberFace(side, 0);
+        PickerUntintFace(side, 0);
         p->mCaptainGridComponents[side ^ 1]->mMapMenu->SetItemActive(
             p->mCaptainGridComponents[side]->mMapMenu->GetSelectedItem(), true);
         if (ph == PHASE_CHOOSING_SIDEKICK)
@@ -819,7 +629,7 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
         p->mComponentState[1].GotoPreviousPhase(); // side 2 back to idle
         MixedPickerReadyToCaptainGrid(p, 0);
         gPickCount[0] = 2;
-        PickerRenumberSide(p, 0);
+        PickerRetintSide(p, 0);
         return true;
     }
 
@@ -868,7 +678,7 @@ IChooseCaptain::IChooseCaptain()
  */
 IChooseCaptain::~IChooseCaptain()
 {
-    PickerDestroyOverlays(); // MOD (mixed teams): no number copy outlives this screen
+    PickerRestoreAllTints(); // MOD (mixed teams): every face back to normal when this screen goes
 
     // PORT: was a walk over `this` with hardcoded 0xC and 4 byte strides, three pointers and one pointer.
     for (int i = 0; i < 2; i++)
@@ -958,7 +768,7 @@ void IChooseCaptain::UpdateSound(float dt)
  */
 UpdateResult IChooseCaptain::Update(float dt)
 {
-    PickerTickOverlays(dt); // MOD (mixed teams): number fades
+    PickerTickTints(dt); // MOD (mixed teams): tint fades
 
     CheckForDisconnectedHumanPlayers();
     FindAliveHumanPlayers();
