@@ -329,6 +329,10 @@ void Presentation::Finish()
     FixedUpdateTask::mTimeScale = 1.0f;
     const char* functionName = idleFun;
     ParticleUpdateTask::SetTimeScale(1.0f);
+    {
+        extern void NisSetScorerFilter(const char* name);
+        NisSetScorerFilter(NULL); // MOD (mixed teams): the goal sequence is over
+    }
 
     if (nlStrCmp<char>(idleFun, mCurrentFunction) != 0 && nlStrCmp<char>(idleFun, functionName) != 0)
     {
@@ -699,6 +703,11 @@ void Presentation::Call(const char* functionName, const char* nisFilter)
         return;
     }
 
+    if (nlStrNCmp<char>(functionName, "Goal", 4) != 0)
+    {
+        extern void NisSetScorerFilter(const char* name);
+        NisSetScorerFilter(NULL); // MOD (mixed teams): anything that is not a goal scene
+    }
     nlStrNCpy<char>(mCurrentFunction, functionName, 64);
     mSkipPressed = false;
     mInsideByPass = false;
@@ -1326,6 +1335,10 @@ void Presentation::UpdateAndRenderLetterBox()
  */
 void Presentation::Reset()
 {
+    {
+        extern void NisSetScorerFilter(const char* name);
+        NisSetScorerFilter(NULL); // MOD (mixed teams)
+    }
     mIsAllowedToSkip[0] = true;
     mIsAllowedToSkip[1] = true;
     mIsAllowedToSkip[2] = true;
@@ -1334,6 +1347,10 @@ void Presentation::Reset()
     FixedUpdateTask::mTimeScale = 1.0f;
     const char* functionName = idleFun;
     ParticleUpdateTask::SetTimeScale(1.0f);
+    {
+        extern void NisSetScorerFilter(const char* name);
+        NisSetScorerFilter(NULL); // MOD (mixed teams): the goal sequence is over
+    }
 
     if (nlStrCmp<char>(idleFun, mCurrentFunction) != 0 && nlStrCmp<char>(idleFun, functionName) != 0)
     {
