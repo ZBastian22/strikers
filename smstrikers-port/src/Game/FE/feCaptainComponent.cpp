@@ -37,7 +37,13 @@ static bool gPickedASidekick[2];
 // Tints fade in when placed and fade out when B rewinds, and every face is
 // restored when the screen is left.
 
-static const float kPickerFadeTime = 0.2f;
+// Fade length in seconds, from picker_fade_ms (default 350).
+static float PickerFadeTime()
+{
+    int ms = GetConfigInt(Config::Global(), "picker_fade_ms", 350);
+    if (ms < 1) { ms = 1; }
+    return ms / 1000.0f;
+}
 
 struct PickerTint
 {
@@ -107,7 +113,7 @@ static void PickerTickTints(float dt)
             }
             if (t->mDying)
             {
-                t->mT -= dt / kPickerFadeTime;
+                t->mT -= dt / PickerFadeTime();
                 if (t->mT <= 0.0f)
                 {
                     t->mIcon->SetAssetColour(t->mOriginal);
@@ -117,7 +123,7 @@ static void PickerTickTints(float dt)
             }
             else if (t->mT < 1.0f)
             {
-                t->mT += dt / kPickerFadeTime;
+                t->mT += dt / PickerFadeTime();
                 if (t->mT > 1.0f) { t->mT = 1.0f; }
             }
             PickerApplyTint(t);
