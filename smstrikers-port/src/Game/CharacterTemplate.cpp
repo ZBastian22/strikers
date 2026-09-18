@@ -1611,9 +1611,17 @@ static eCharacterClass MixedTeamSlotClass(const char* key, eCharacterClass fallb
     }
 
     eTeamID team = ConvertToTeamID(name.c_str());
-    if (team != TEAM_INVALID && team != TEAM_MYSTERY)
+    if (team == TEAM_MYSTERY)
+    {
+        return MYSTERY; // MOD (mixed teams): the robot, as one teammate among others
+    }
+    if (team != TEAM_INVALID)
     {
         return ConvertToCharacterClass(team);
+    }
+    if (nlStrCmp<char>(name.c_str(), "super") == 0 || nlStrCmp<char>(name.c_str(), "robot") == 0)
+    {
+        return MYSTERY;
     }
 
     OSReport("[mixed teams] %s=%s is not a character name; using the team's sidekick\n", key, name.c_str());
