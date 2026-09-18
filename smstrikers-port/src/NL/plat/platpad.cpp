@@ -214,11 +214,30 @@ bool cPlatPad::RumbleActive()
     return padStatus[0].m_GameCubePads[m_padIndex].bRumbleActive;
 }
 
+// MOD (camera): while an orbit camera is steering with pad 1's right stick,
+// the game itself sees that stick centred, so it cannot trigger the feint.
+// The camera reads the real values through the raw getters below.
+bool gModCamOwnsRightStick = false;
+
+f32 PlatPadRawRightX(int padIndex)
+{
+    return padStatus[0].m_GameCubePads[padIndex].fAnalogRightX;
+}
+
+f32 PlatPadRawRightY(int padIndex)
+{
+    return padStatus[0].m_GameCubePads[padIndex].fAnalogRightY;
+}
+
 /**
  * Offset/Address/Size: 0x650 | 0x801C3600 | size: 0x18
  */
 f32 cPlatPad::AnalogRightY()
 {
+    if (gModCamOwnsRightStick && m_padIndex == 0)
+    {
+        return 0.0f;
+    }
     return padStatus[0].m_GameCubePads[m_padIndex].fAnalogRightY;
 }
 
@@ -227,6 +246,10 @@ f32 cPlatPad::AnalogRightY()
  */
 f32 cPlatPad::AnalogRightX()
 {
+    if (gModCamOwnsRightStick && m_padIndex == 0)
+    {
+        return 0.0f;
+    }
     return padStatus[0].m_GameCubePads[m_padIndex].fAnalogRightX;
 }
 
