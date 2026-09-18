@@ -109,12 +109,28 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         return NULL;
     }
 
-    // Shift: where the slot's animation starts minus where his own starts.
-    nlVector3 slotStart = { 0.0f, 0.0f, 0.0f };
-    nlVector3 ownStart = { 0.0f, 0.0f, 0.0f };
-    slotAnim->GetRootTrans(0.0f, &slotStart);
-    own->GetRootTrans(0.0f, &ownStart);
-    nlVec3Sub(gNisCharOffset[charIndex], slotStart, ownStart);
+    // Shift: line up where the two animations FINISH (the pose the camera
+    // looks at), since a captain's routine travels much further than a
+    // sidekick's. intro_align = "start" lines up the beginnings instead.
+    // Height is left to the animation itself unless intro_shift_z is on.
+    BasicString<char, Detail::TempStringAllocator> align
+        = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_align", BasicString<char, Detail::TempStringAllocator>("end"));
+    bool atStart = (align.c_str() != NULL && nlStrCmp<char>(align.c_str(), "start") == 0);
+    float slotT = atStart ? 0.0f : slotAnim->GetDuration();
+    float ownT = atStart ? 0.0f : own->GetDuration();
+    nlVector3 slotPos = { 0.0f, 0.0f, 0.0f };
+    nlVector3 ownPos = { 0.0f, 0.0f, 0.0f };
+    slotAnim->GetRootTrans(slotT, &slotPos);
+    own->GetRootTrans(ownT, &ownPos);
+    nlVec3Sub(gNisCharOffset[charIndex], slotPos, ownPos);
+    if (!GetConfigBool(cfg, "intro_shift_z", false))
+    {
+        gNisCharOffset[charIndex].z = 0.0f;
+    }
+    OSReport("[mixed teams] intro:   slot %s (%.1f, %.1f, %.1f) own %s (%.1f, %.1f, %.1f), durations %.2f / %.2f\n",
+             atStart ? "start" : "end", slotPos.x, slotPos.y, slotPos.z,
+             atStart ? "start" : "end", ownPos.x, ownPos.y, ownPos.z,
+             slotAnim->GetDuration(), own->GetDuration());
     if (gNisCharBuffer[charIndex] != NULL)
     {
         nlFree(gNisCharBuffer[charIndex]);
