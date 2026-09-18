@@ -1,5 +1,6 @@
 #include "Game/NisPlayer.h"
 #include "dolphin/os.h"
+#include <string.h>
 #include <stdlib.h>
 #include "Game/Camera/CameraMan.h"
 #include "Game/Character.h"
@@ -365,6 +366,79 @@ int NisGetScorerIndex()
     return gNisScorerIndex;
 }
 
+// MOD (mixed teams): intros. The last cutscene type requested per target, so a
+// sidekick-slot animation can look up the same type of file for a captain.
+static char gNisLastType[32][32];
+
+const char* NisLastType(int target)
+{
+    return (target >= 0 && target < 32) ? gNisLastType[target] : "";
+}
+
+// Find and load "<charName>_..." of the same type as likeName / nisType from the
+// dictionary. Returns a buffer the caller frees with nlFree, or NULL.
+char* NisLoadOwnFile(const char* charName, const char* likeName, const char* nisType, int* outSize, char* outName)
+{
+    NisPlayer* player = NisPlayer::Instance();
+    *outSize = 0;
+    outName[0] = 0;
+
+    // The part of the current name after its character prefix: "toad_intro_a" -> "_intro_a".
+    const char* rest = strchr(likeName, '_');
+    char szWant[64];
+    nlSNPrintf(szWant, 64, "%s%s", charName, rest != NULL ? rest : "");
+
+    NisHeader* pick = NULL;
+    for (int i = 0; i < player->mDictSize && pick == NULL; i++)
+    {
+        if (nlStrCmp<char>(player->mDict[i].name, szWant) == 0)
+        {
+            pick = &player->mDict[i];
+        }
+    }
+    if (pick == NULL && nisType != NULL && nisType[0] != 0)
+    {
+        unsigned int prefixLen = nlStrLen(charName);
+        for (int i = 0; i < player->mDictSize && pick == NULL; i++)
+        {
+            const char* nm = player->mDict[i].name;
+            if (nlStrNCmp<char>(nm, charName, prefixLen) == 0 && nm[prefixLen] == '_' && strstr(nm, nisType) != NULL)
+            {
+                pick = &player->mDict[i];
+            }
+        }
+    }
+    if (pick == NULL)
+    {
+        OSReport("[mixed teams] intro: no '%s' file like '%s' (type '%s')\n", charName, likeName, nisType ? nisType : "");
+        unsigned int prefixLen = nlStrLen(charName);
+        for (int i = 0; i < player->mDictSize; i++)
+        {
+            const char* nm = player->mDict[i].name;
+            if (nlStrNCmp<char>(nm, charName, prefixLen) == 0 && nm[prefixLen] == '_')
+            {
+                OSReport("[mixed teams] intro:   candidate '%s'\n", nm);
+            }
+        }
+        return NULL;
+    }
+
+    BasicString<char, Detail::TempStringAllocator> fileName("art/nis/");
+    fileName.AppendInPlace(pick->name);
+    nlFile* file = nlOpen(fileName.c_str());
+    if (file == NULL)
+    {
+        OSReport("[mixed teams] intro: cannot open %s\n", fileName.c_str());
+        return NULL;
+    }
+    char* buffer = (char*)nlMalloc(pick->size + 0x40, 0x20, false);
+    nlRead(file, buffer, pick->size);
+    nlClose(file);
+    *outSize = pick->size;
+    nlSNPrintf(outName, 64, "%s", pick->name);
+    return buffer;
+}
+
 /**
  * Offset/Address/Size: 0x2AD4 | 0x801177B0 | size: 0x1F8
  */
@@ -725,6 +799,10 @@ BasicString<char, Detail::TempStringAllocator> NisPlayer::GetTargetFilter(NisTar
 void NisPlayer::Load(const char* nisType, NisTarget target, NisUseStadiumOffset useStadiumOffset, NisUseFilter useFilter, NisWinnerType winnerType)
 {
     mActive = true;
+    if ((int)target >= 0 && (int)target < 32)
+    {
+        nlSNPrintf(gNisLastType[(int)target], 32, "%s", nisType); // MOD (mixed teams): intros
+    }
 
     BasicString<char, Detail::TempStringAllocator> filter = GetTargetFilter(target, winnerType);
     if ((target == NIS_TARGET_WINNER_SIDEKICK || target == NIS_TARGET_WINNER_CAPTAIN) && gNisScorerFilter[0] != 0)
