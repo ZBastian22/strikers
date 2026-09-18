@@ -293,6 +293,22 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
             gap = GetConfigFloat(cfg, "intro_walk_gap_away", gap);
         }
         float stagger = GetConfigFloat(cfg, "intro_walk_stagger", 0.8f);
+        float delay = GetConfigFloat(cfg, "intro_walk_delay", 0.35f);
+        // Per-scene overrides, keyed on the scene's own name as the log prints
+        // it: intro_walk_gap_establish_stadium_home, intro_walk_stagger_..., intro_walk_delay_...
+        {
+            const char* sceneType = NisLastType((int)target);
+            if (sceneType != NULL && sceneType[0] != 0)
+            {
+                char szKey[96];
+                nlSNPrintf(szKey, 96, "intro_walk_gap_%s", sceneType);
+                gap = GetConfigFloat(cfg, szKey, gap);
+                nlSNPrintf(szKey, 96, "intro_walk_stagger_%s", sceneType);
+                stagger = GetConfigFloat(cfg, szKey, stagger);
+                nlSNPrintf(szKey, 96, "intro_walk_delay_%s", sceneType);
+                delay = GetConfigFloat(cfg, szKey, delay);
+            }
+        }
         float side = (slotNumber % 2 == 1) ? -1.0f : 1.0f; // 1 left, 2 right, 3 left
         gNisWalkGap[charIndex] = gap * (float)slotNumber;
         gNisWalkSide[charIndex] = stagger * side;
@@ -303,9 +319,10 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         gNisShiftDone[charIndex] = true;
         // And each follower sets off a beat after the one ahead, which spreads
         // the line along the path whatever direction the shift ended up in.
-        gNisDelay[charIndex] = GetConfigFloat(cfg, "intro_walk_delay", 0.35f) * (float)slotNumber;
-        OSReport("[mixed teams] intro: character %d (%s) walks in with '%s', %.1f m behind the leader, %.1f m to the %s\n",
-                 charIndex, charName, szName, gap * (float)slotNumber, stagger, side < 0.0f ? "left" : "right");
+        gNisDelay[charIndex] = delay * (float)slotNumber;
+        OSReport("[mixed teams] intro: character %d (%s) walks in with '%s', %.1f m behind the leader, %.1f m to the %s, sets off after %.2fs (scene %s)\n",
+                 charIndex, charName, szName, gap * (float)slotNumber, stagger, side < 0.0f ? "left" : "right",
+                 gNisDelay[charIndex], NisLastType((int)target));
     }
     else
     {
