@@ -21,6 +21,7 @@
 #include "Game/Team.h"
 #include "Game/Player.h"
 #include "NL/globalpad.h"
+#include "dolphin/pad.h"
 #include "NL/gl/glMatrix.h"
 #include "dolphin/os.h"
 #include "Game/Net.h"
@@ -140,11 +141,17 @@ static float gModCamFwdX = 1.0f;
 static float gModCamFwdY = 0.0f;
 static float gModCamYaw = 0.0f;   // orbit heading in the chase view, radians
 static float gModCamPitch = 0.0f; // orbit height offset in the chase view, -1..1
+static float gModCamZoom = 1.0f;  // zoom factor in the chase views, from the d-pad
+
+extern bool gModCamOwnsRightStick;
+extern f32 PlatPadRawRightX(int padIndex);
+extern f32 PlatPadRawRightY(int padIndex);
 
 void ModCameraCycle(int dir)
 {
     gModCamPreset = (gModCamPreset + dir + kModCamCount) % kModCamCount;
     gModCamSnap = true;
+    gModCamZoom = 1.0f;
     OSReport("[camera] %d: %s\n", gModCamPreset, kModCamNames[gModCamPreset]);
 }
 
@@ -163,6 +170,7 @@ static void ModCamSmooth(nlVector3& cur, const nlVector3& goal, float k)
 // Returns true and fills the view when a preset is active and the world is up.
 static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& cameraPosition, float dt)
 {
+    gModCamOwnsRightStick = false;
     if (gModCamPreset == 0 || pCamera == NULL || pCamera->GetType() != eCameraType_Gameplay)
     {
         return false;
@@ -218,6 +226,7 @@ static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& 
     bool orbit = (gModCamPreset == 1 || gModCamPreset == 5) && GetConfigBool(Config::Global(), "cam_orbit", true);
     if (orbit)
     {
+        gModCamOwnsRightStick = true; // the game sees it centred from now on
         if (gModCamSnap)
         {
             gModCamYaw = atan2f(fy, fx); // start facing the attack direction
@@ -225,8 +234,8 @@ static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& 
         }
         if (pad != NULL && dt > 0.0f)
         {
-            float sx = pad->AnalogRightX();
-            float sy = pad->AnalogRightY();
+            float sx = PlatPadRawRightX(0);
+            float sy = PlatPadRawRightY(0);
             float dead = ModCamCfg("cam_orbit_deadzone", 0.2f);
             if (sx > dead || sx < -dead)
             {
@@ -263,6 +272,19 @@ static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& 
             height = ModCamCfg("cam_wide_height", 8.0f);
             ahead = ModCamCfg("cam_wide_look_ahead", 8.0f);
         }
+        // Zoom: d-pad up brings the camera in, d-pad down pushes it out.
+        if (pad != NULL && dt > 0.0f)
+        {
+            float zs = ModCamCfg("cam_zoom_speed", 1.0f); // factor per second
+            if (pad->IsPressed(PAD_BUTTON_UP, false))   { gModCamZoom -= zs * dt; }
+            if (pad->IsPressed(PAD_BUTTON_DOWN, false)) { gModCamZoom += zs * dt; }
+            float zmin = ModCamCfg("cam_zoom_min", 0.4f);
+            float zmax = ModCamCfg("cam_zoom_max", 2.5f);
+            if (gModCamZoom < zmin) { gModCamZoom = zmin; }
+            if (gModCamZoom > zmax) { gModCamZoom = zmax; }
+        }
+        dist *= gModCamZoom;
+        height *= gModCamZoom;
         float h = height;
         if (orbit)
         {
