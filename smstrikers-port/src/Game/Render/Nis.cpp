@@ -7,6 +7,7 @@ extern "C" unsigned long port_cam_swap(void*, unsigned long);
 #include "Game/ReplayManager.h"
 #include "Game/CharacterTemplate.h"
 #include "Game/Player.h"
+#include "NL/nlConfig.h"
 #include "Game/NisPlayer.h"
 #include "Game/Sys/audio.h"
 #include "Game/Sys/GCStream.h"
@@ -35,6 +36,95 @@ public:
 };
 
 class EmissionController;
+
+// ---------------------------------------------------------------------------
+// MOD (mixed teams): intros. A captain standing in a sidekick slot would walk
+// in with the sidekick's animation (Donkey Kong upright on two legs). With
+// intro_own_anims on, the slot's animation is swapped for the captain's own,
+// from his own file of the same type, shifted so he still lands on the slot's
+// mark. intro_own_anims_who = "all" or one name, e.g. "donkeykong".
+// ---------------------------------------------------------------------------
+extern char* NisLoadOwnFile(const char* charName, const char* likeName, const char* nisType, int* outSize, char* outName);
+extern const char* NisLastType(int target);
+
+static nlVector3 gNisCharOffset[10];
+static char* gNisCharBuffer[10];
+static Nis* gNisCharOwner[10];
+
+static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, const char* likeName, cSAnim* slotAnim)
+{
+    Config& cfg = Config::Global();
+    if (!GetConfigBool(cfg, "mixed_teams", false) || !GetConfigBool(cfg, "intro_own_anims", true))
+    {
+        return NULL;
+    }
+    if (target != NIS_TARGET_HOME_SIDEKICK && target != NIS_TARGET_AWAY_SIDEKICK)
+    {
+        return NULL;
+    }
+    if (g_pCharacters[charIndex] == NULL)
+    {
+        return NULL;
+    }
+    eCharacterClass cc = ((cPlayer*)g_pCharacters[charIndex])->m_eCharacterClass;
+    if (!::IsCaptain(cc))
+    {
+        return NULL;
+    }
+    const char* charName = GetCharacterName(cc);
+    BasicString<char, Detail::TempStringAllocator> who
+        = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_own_anims_who", BasicString<char, Detail::TempStringAllocator>("all"));
+    if (who.c_str() != NULL && who.c_str()[0] != 0 && nlStrCmp<char>(who.c_str(), "all") != 0
+        && nlStrCmp<char>(who.c_str(), charName) != 0)
+    {
+        return NULL;
+    }
+
+    int size = 0;
+    char szName[64];
+    char* buffer = NisLoadOwnFile(charName, likeName, NisLastType((int)target), &size, szName);
+    if (buffer == NULL)
+    {
+        return NULL;
+    }
+
+    // The captain's own animation is the first one in his file.
+    cSAnim* own = NULL;
+    nlChunk* chunk = (nlChunk*)buffer;
+    nlChunk* end = (nlChunk*)(buffer + size);
+    while (chunk < end)
+    {
+        const u32 uChunkID = port_be32(&chunk->m_ID) & 0x80FFFFFF;
+        const u32 uChunkSize = port_be32(&chunk->m_Size);
+        if (uChunkID == 0x80017000)
+        {
+            own = cSAnim::Initialize(chunk);
+            break;
+        }
+        chunk = (nlChunk*)((char*)chunk + uChunkSize + 8);
+    }
+    if (own == NULL)
+    {
+        nlFree(buffer);
+        return NULL;
+    }
+
+    // Shift: where the slot's animation starts minus where his own starts.
+    nlVector3 slotStart = { 0.0f, 0.0f, 0.0f };
+    nlVector3 ownStart = { 0.0f, 0.0f, 0.0f };
+    slotAnim->GetRootTrans(0.0f, &slotStart);
+    own->GetRootTrans(0.0f, &ownStart);
+    nlVec3Sub(gNisCharOffset[charIndex], slotStart, ownStart);
+    if (gNisCharBuffer[charIndex] != NULL)
+    {
+        nlFree(gNisCharBuffer[charIndex]);
+    }
+    gNisCharBuffer[charIndex] = buffer;
+    gNisCharOwner[charIndex] = owner;
+    OSReport("[mixed teams] intro: character %d (%s) uses '%s' shifted (%.1f, %.1f, %.1f)\n",
+             charIndex, charName, szName, gNisCharOffset[charIndex].x, gNisCharOffset[charIndex].y, gNisCharOffset[charIndex].z);
+    return own;
+}
 
 /**
  * Offset/Address/Size: 0x1658 | 0x8012CA68 | size: 0x53C
@@ -117,6 +207,17 @@ Nis::Nis(NisHeader& header, char* data, int size)
                     OSReport("[mixed teams] nis: '%s' animation %d -> character %d (%s)\n",
                              mHeader->name, numAnimations, i, who);
                 }
+                // MOD (mixed teams): a borrowed captain in a sidekick slot gets his own animation.
+                if (gNisCharOwner[i] != this)
+                {
+                    gNisCharOffset[i].x = gNisCharOffset[i].y = gNisCharOffset[i].z = 0.0f;
+                    gNisCharOwner[i] = NULL;
+                }
+                cSAnim* own = NisOwnIntroAnim(this, i, mTarget, mHeader->name, anim);
+                if (own != NULL)
+                {
+                    anim = own;
+                }
                 mBallId[i] = numAnimations;
                 cPN_SAnimController* controller = ::new (AllocateSAnimController()) cPN_SAnimController(anim, NULL, PM_HOLD, NULL, 0, false);
                 mCharacterControllers[i] = controller;
@@ -160,6 +261,20 @@ char* Nis::Name() const
  */
 Nis::~Nis()
 {
+    // MOD (mixed teams): drop any borrowed-captain intro files this cutscene owned.
+    for (int i = 0; i < 10; i++)
+    {
+        if (gNisCharOwner[i] == this)
+        {
+            if (gNisCharBuffer[i] != NULL)
+            {
+                nlFree(gNisCharBuffer[i]);
+                gNisCharBuffer[i] = NULL;
+            }
+            gNisCharOwner[i] = NULL;
+            gNisCharOffset[i].x = gNisCharOffset[i].y = gNisCharOffset[i].z = 0.0f;
+        }
+    }
     for (int i = 0; i < mNumCameras; i++)
     {
         BasicString<char, Detail::TempStringAllocator> name = Format(BasicString<char, Detail::TempStringAllocator>(((void)0, "{0}_{1}")), mHeader->name, i);
@@ -295,6 +410,12 @@ void Nis::Render()
 
         nlVec3Add(rootTrans, rootTrans, mHeader->stadiumOffset);
         nlVec3Add(rootTrans, rootTrans, offset);
+        if (gNisCharOwner[i] == this)
+        {
+            nlVector3 shift = gNisCharOffset[i]; // MOD (mixed teams): onto the slot's mark
+            if (mMirrored) { shift.x = -shift.x; }
+            nlVec3Add(rootTrans, rootTrans, shift);
+        }
 
         pDC->EvaluateFrom(*mCharacterControllers[i], rootTrans, angle);
         pDC->BuildNodeMatrices();
