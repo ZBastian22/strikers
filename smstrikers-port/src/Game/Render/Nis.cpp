@@ -63,6 +63,10 @@ static int gNisSlotNumber[10];                   // 1..3 within the team
 static nlVector3 gNisShift[10];                  // added to the root, after mirroring
 static bool gNisShiftDone[10];
 static float gNisDelay[10];                      // seconds before the own routine starts
+static float gNisWalkGap[10];                    // walk-in: metres behind the leader
+static float gNisWalkSide[10];                   // walk-in: metres to the side (+left/-right)
+static float gNisLastDirX[10];                   // walk-in: last known heading
+static float gNisLastDirY[10];
 static Nis* gNisHideOwner[10];                   // borrowed captains hidden in the face-off
 static char gNisOwnName[10][64];                 // the own file's name, for its voice script
 int gNisTriggerVoiceOnly = 0;                    // while set, AddTrigger keeps only character voice
@@ -290,8 +294,12 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         }
         float stagger = GetConfigFloat(cfg, "intro_walk_stagger", 0.8f);
         float side = (slotNumber % 2 == 1) ? -1.0f : 1.0f; // 1 left, 2 right, 3 left
-        gNisShift[charIndex].x = -dx * gap * (float)slotNumber + (-dy) * stagger * side;
-        gNisShift[charIndex].y = -dy * gap * (float)slotNumber + (dx) * stagger * side;
+        gNisWalkGap[charIndex] = gap * (float)slotNumber;
+        gNisWalkSide[charIndex] = stagger * side;
+        gNisLastDirX[charIndex] = dx;
+        gNisLastDirY[charIndex] = dy;
+        gNisShift[charIndex].x = -dx * gNisWalkGap[charIndex] + (-dy) * gNisWalkSide[charIndex];
+        gNisShift[charIndex].y = -dy * gNisWalkGap[charIndex] + (dx) * gNisWalkSide[charIndex];
         gNisShiftDone[charIndex] = true;
         // And each follower sets off a beat after the one ahead, which spreads
         // the line along the path whatever direction the shift ended up in.
@@ -674,6 +682,33 @@ void Nis::Render()
                 gNisShift[i].z = 0.0f;
                 gNisShiftDone[i] = true;
                 OSReport("[mixed teams] intro: character %d face-off placed by (%.1f, %.1f)\n", i, gNisShift[i].x, gNisShift[i].y);
+            }
+            if (gNisMode[i] == NIS_MOD_WALK)
+            {
+                // Follow the path as it bends: "behind" is the heading right now.
+                cSAnim* pAnim = mCharacterControllers[i]->m_pSAnim;
+                float tNow = mCharacterControllers[i]->get_fTime();
+                float tPrev = tNow - 0.25f;
+                if (tPrev < 0.0f) { tPrev = 0.0f; }
+                nlVector3 pNow = { 0.0f, 0.0f, 0.0f };
+                nlVector3 pPrev = { 0.0f, 0.0f, 0.0f };
+                pAnim->GetRootTrans(tNow, &pNow);
+                pAnim->GetRootTrans(tPrev, &pPrev);
+                float vx = pNow.x - pPrev.x;
+                float vy = pNow.y - pPrev.y;
+                float vl = sqrtf(vx * vx + vy * vy);
+                if (vl > 0.05f)
+                {
+                    vx /= vl; vy /= vl;
+                    gNisLastDirX[i] += (vx - gNisLastDirX[i]) * 0.2f; // eased, no jitter
+                    gNisLastDirY[i] += (vy - gNisLastDirY[i]) * 0.2f;
+                    float dl = sqrtf(gNisLastDirX[i] * gNisLastDirX[i] + gNisLastDirY[i] * gNisLastDirY[i]);
+                    if (dl > 0.001f) { gNisLastDirX[i] /= dl; gNisLastDirY[i] /= dl; }
+                }
+                float dx = gNisLastDirX[i];
+                float dy = gNisLastDirY[i];
+                gNisShift[i].x = -dx * gNisWalkGap[i] + (-dy) * gNisWalkSide[i];
+                gNisShift[i].y = -dy * gNisWalkGap[i] + (dx) * gNisWalkSide[i];
             }
             nlVector3 shift = gNisShift[i];
             if (gNisMode[i] == NIS_MOD_WALK && mMirrored) { shift.x = -shift.x; }
