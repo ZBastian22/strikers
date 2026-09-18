@@ -83,6 +83,40 @@ void WorldSetDrawWholeStadium(bool on)
     sbPretendWereNotInGameplayCam = on ? 1 : 0;
 }
 
+// Diagnostics: how the hide-flagged pieces are doing under a preset.
+static void WorldReportHiddenPieces(World* pWorld)
+{
+    static unsigned long nLast = 0;
+    if (!sbPretendWereNotInGameplayCam)
+    {
+        return;
+    }
+    unsigned long now = PortInputFrame();
+    if (now - nLast < 60)
+    {
+        return;
+    }
+    nLast = now;
+    typedef nlAVLTreeIterator<unsigned long, DrawableObject*, DefaultKeyCompare<unsigned long> > DrawableIterator;
+    DrawableIterator* it = pWorld->m_drawableMap.GetIterator();
+    int flagged = 0, visible = 0, faded = 0, hiddenByFlag = 0;
+    while (it->IsValid())
+    {
+        DrawableObject* o = it->CurrentValue();
+        if (o->m_uObjectCreationFlags & 0xA000)
+        {
+            ++flagged;
+            if (o->m_uObjectFlags & 0x80) ++hiddenByFlag;
+            if (o->m_translucency >= 1.0f) ++visible;
+            else if (o->m_translucency > 0.0f) ++faded;
+        }
+        it->Next();
+    }
+    delete it;
+    OSReport("[camera] whole stadium: %d hide-flagged pieces, %d fully visible, %d fading, %d hidden by flag, camera type %d\n",
+             flagged, visible, faded, hiddenByFlag, cCameraManager::m_pBeginFrameCameraType);
+}
+
 static LightObject fxLightObjects[4];
 
 /**
@@ -1410,6 +1444,7 @@ void World::Render()
     g_bDebugEqualsEnd = bFreezeEnd;
     if (!g_bFreezeFrustum && !bFreezeSide && !bFreezeEnd)
         ExtractFrustumPlanes();
+    WorldReportHiddenPieces(this); // MOD (camera): diagnostics
         {
             static const bool bCullProbe = getenv("STRIKERS_PROBE_CULL") != NULL;
             static unsigned long nLast = 0;
