@@ -72,7 +72,7 @@ static const unsigned char kPickerTeamRGB[9][3] = {
     { 170,  70, 230 }, // Waluigi, purple
     { 250, 225,  40 }, // Wario, yellow
     {  90, 200,  70 }, // Yoshi, green
-    { 255, 255, 255 }, // mystery
+    { 140, 170, 215 }, // the robot: steel blue
 };
 
 static const char* PickerSidekickCell(eSidekickID sk)
@@ -164,9 +164,9 @@ static void PickerTintFace(IChooseCaptain* p, int side, int pickIdx, bool onCapt
 
     // The character's colour: a captain's own, or the team's for a sidekick.
     eTeamID team = ConvertToTeamID(charName);
-    if (team == TEAM_INVALID || team == TEAM_MYSTERY)
+    if (team == TEAM_INVALID)
     {
-        team = (eTeamID)p->mHomeAwayTeam[side];
+        team = (eTeamID)p->mHomeAwayTeam[side]; // a sidekick takes the team's colour
     }
     if (team < 0 || team > 8)
     {
@@ -504,12 +504,12 @@ static bool MixedPickerConfirm(IChooseCaptain* p, int side)
     if (onCaptainGrid)
     {
         eTeamID sel = p->mCaptainGridComponents[side]->GetSelectedItem();
-        if (sel == TEAM_MYSTERY)
+        if (sel == TEAM_INVALID)
         {
             FEAudio::PlayAnimAudioEvent("sfx_deny", false);
             return true;
         }
-        nm = GetTeamName(sel);
+        nm = GetTeamName(sel); // the robot's "?" cell is a teammate like any other
         cell = kPickerCaptCell[(int)sel];
     }
     else
