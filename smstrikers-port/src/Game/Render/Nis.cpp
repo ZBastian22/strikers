@@ -38,24 +38,31 @@ public:
 class EmissionController;
 
 // ---------------------------------------------------------------------------
-// MOD (mixed teams): intros. A captain standing in a sidekick slot would walk
-// in and face off with the sidekick's animation (Donkey Kong upright on two
-// legs). With intro_own_anims on, his body plays his own captain routine from
-// his own file of the same type, while his position and facing still come
-// from the sidekick slot's animation: he is exactly where the sidekick would
-// be, doing his own thing.
-//   intro_own_anims_who      "all" or one name
-//   intro_faceoff_generic    captains who keep the generic routine in the
-//                            face-off (a standing scene): "mario,yoshi"
+// MOD (mixed teams): intros. A captain standing in a sidekick slot would
+// otherwise use the sidekick's animation (Donkey Kong upright on two legs).
+//
+// Walk-in ("enter_stadium", "establish_stadium"): he plays his own walk from
+// his own file, along his own path, but placed a set distance behind the
+// leader so the team walks in single file (intro_walk_gap metres apart).
+//
+// Face-off ("attitude"): by default borrowed captains are not drawn at all
+// (intro_faceoff_hide). With intro_faceoff_own on, each performs his own
+// face-off routine at the sidekick's final mark, timed to finish with the
+// scene; he stays hidden until his routine starts.
 // ---------------------------------------------------------------------------
 extern char* NisLoadOwnFile(const char* charName, const char* likeName, const char* nisType, int* outSize, char* outName);
 extern const char* NisLastType(int target);
 
+enum { NIS_MOD_NONE = 0, NIS_MOD_WALK = 1, NIS_MOD_FACEOFF = 2 };
+
 static char* gNisCharBuffer[10];                 // the captain's own file, while in use
-static cPN_SAnimController* gNisSlotCtrl[10];    // the slot's animation: position and facing
+static cPN_SAnimController* gNisSlotCtrl[10];    // the slot's animation, kept for measuring
 static Nis* gNisCharOwner[10];
-static nlVector3 gNisHipFix[10];                 // cancels any placement baked into the captain's body
-static bool gNisHipFixDone[10];
+static int gNisMode[10];
+static int gNisSlotNumber[10];                   // 1..3 within the team
+static nlVector3 gNisShift[10];                  // added to the root, after mirroring
+static bool gNisShiftDone[10];
+static float gNisDelay[10];                      // seconds before the own routine starts
 static Nis* gNisHideOwner[10];                   // borrowed captains hidden in the face-off
 
 // True when any comma-separated token of list appears inside name.
@@ -98,7 +105,7 @@ static bool NisNameInList(const char* list, const char* name)
     return false;
 }
 
-static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, const char* likeName, cSAnim* slotAnim)
+static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, const char* likeName, cSAnim* slotAnim, int slotNumber)
 {
     Config& cfg = Config::Global();
     if (!GetConfigBool(cfg, "mixed_teams", false) || !GetConfigBool(cfg, "intro_own_anims", true))
@@ -127,38 +134,36 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         return NULL;
     }
 
-    // Which scene is this? The files are named by scene: the walk-in is
-    // "enter_stadium" / "establish_stadium", the face-off is "attitude".
-    // Anything else is left exactly as the game plays it.
+    // Which scene is this? Files are named by scene.
     BasicString<char, Detail::TempStringAllocator> walkTypes
         = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_walk_scenes", BasicString<char, Detail::TempStringAllocator>("enter_stadium,establish_stadium"));
     BasicString<char, Detail::TempStringAllocator> faceTypes
         = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_faceoff_scenes", BasicString<char, Detail::TempStringAllocator>("attitude"));
-    bool standing = NisTypeMatches(faceTypes.c_str(), likeName);
+    bool faceoff = NisTypeMatches(faceTypes.c_str(), likeName);
     bool walking = NisTypeMatches(walkTypes.c_str(), likeName);
-    if (!standing && !walking)
+    if (!faceoff && !walking)
     {
         return NULL; // not an intro scene we touch
     }
-    nlVector3 a = { 0.0f, 0.0f, 0.0f };
-    nlVector3 b = { 0.0f, 0.0f, 0.0f };
-    slotAnim->GetRootTrans(0.0f, &a);
-    slotAnim->GetRootTrans(slotAnim->GetDuration(), &b);
-    float travel = sqrtf((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
-    OSReport("[mixed teams] intro: '%s' -> %s scene (slot travels %.1f)\n", likeName, standing ? "face-off" : "walk-in", travel);
-    if (standing)
+
+    if (faceoff)
     {
-        if (GetConfigBool(cfg, "intro_faceoff_hide", false))
+        if (GetConfigBool(cfg, "intro_faceoff_hide", true))
         {
-            gNisHideOwner[charIndex] = owner; // drawn by nobody until this scene ends
+            gNisHideOwner[charIndex] = owner;
             OSReport("[mixed teams] intro: %s hidden for the face-off\n", charName);
             return NULL;
         }
-        BasicString<char, Detail::TempStringAllocator> keep
-            = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_faceoff_generic", BasicString<char, Detail::TempStringAllocator>("all"));
-        if (nlStrCmp<char>(keep.c_str() ? keep.c_str() : "", "all") == 0 || NisNameInList(keep.c_str(), charName))
+        if (!GetConfigBool(cfg, "intro_faceoff_own", false))
         {
             OSReport("[mixed teams] intro: %s keeps the generic face-off routine\n", charName);
+            return NULL;
+        }
+        BasicString<char, Detail::TempStringAllocator> keep
+            = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_faceoff_generic", BasicString<char, Detail::TempStringAllocator>(""));
+        if (NisNameInList(keep.c_str(), charName))
+        {
+            OSReport("[mixed teams] intro: %s keeps the generic face-off routine (listed)\n", charName);
             return NULL;
         }
     }
@@ -192,7 +197,6 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         return NULL;
     }
 
-    // Position and facing keep coming from the slot's own animation.
     if (gNisCharBuffer[charIndex] != NULL)
     {
         nlFree(gNisCharBuffer[charIndex]);
@@ -200,10 +204,39 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
     gNisCharBuffer[charIndex] = buffer;
     gNisSlotCtrl[charIndex] = ::new (AllocateSAnimController()) cPN_SAnimController(slotAnim, NULL, PM_HOLD, NULL, 0, false);
     gNisCharOwner[charIndex] = owner;
-    gNisHipFixDone[charIndex] = false;
-    gNisHipFix[charIndex].x = gNisHipFix[charIndex].y = gNisHipFix[charIndex].z = 0.0f;
-    OSReport("[mixed teams] intro: character %d (%s) plays '%s' at the %s slot's position (%s scene, slot travels %.1f)\n",
-             charIndex, charName, szName, likeName, standing ? "standing" : "walking", travel);
+    gNisMode[charIndex] = faceoff ? NIS_MOD_FACEOFF : NIS_MOD_WALK;
+    gNisSlotNumber[charIndex] = slotNumber;
+    gNisShift[charIndex].x = gNisShift[charIndex].y = gNisShift[charIndex].z = 0.0f;
+    gNisShiftDone[charIndex] = false;
+    gNisDelay[charIndex] = 0.0f;
+
+    if (walking)
+    {
+        // Single file: his own path, moved back along it by gap * slot number.
+        nlVector3 a = { 0.0f, 0.0f, 0.0f };
+        nlVector3 b = { 0.0f, 0.0f, 0.0f };
+        own->GetRootTrans(0.0f, &a);
+        own->GetRootTrans(own->GetDuration(), &b);
+        float dx = b.x - a.x;
+        float dy = b.y - a.y;
+        float len = sqrtf(dx * dx + dy * dy);
+        if (len > 0.01f) { dx /= len; dy /= len; }
+        float gap = GetConfigFloat(cfg, "intro_walk_gap", 2.5f);
+        gNisShift[charIndex].x = -dx * gap * (float)slotNumber;
+        gNisShift[charIndex].y = -dy * gap * (float)slotNumber;
+        gNisShiftDone[charIndex] = true;
+        OSReport("[mixed teams] intro: character %d (%s) walks in with '%s', %.1f m behind the leader\n",
+                 charIndex, charName, szName, gap * (float)slotNumber);
+    }
+    else
+    {
+        // Face-off: finish together with the scene; placement measured on the first frame.
+        float slotDur = slotAnim->GetDuration();
+        float ownDur = own->GetDuration();
+        gNisDelay[charIndex] = (slotDur > ownDur) ? (slotDur - ownDur) : 0.0f;
+        OSReport("[mixed teams] intro: character %d (%s) performs '%s' at the slot's mark, starting %.2fs in (slot %.2fs, own %.2fs)\n",
+                 charIndex, charName, szName, gNisDelay[charIndex], slotDur, ownDur);
+    }
     return own;
 }
 
@@ -293,12 +326,13 @@ Nis::Nis(NisHeader& header, char* data, int size)
                 {
                     gNisCharOwner[i] = NULL;
                     gNisSlotCtrl[i] = NULL;
+                    gNisMode[i] = NIS_MOD_NONE;
                 }
                 if (gNisHideOwner[i] != this)
                 {
                     gNisHideOwner[i] = NULL;
                 }
-                cSAnim* own = NisOwnIntroAnim(this, i, mTarget, mHeader->name, anim);
+                cSAnim* own = NisOwnIntroAnim(this, i, mTarget, mHeader->name, anim, numAnimations + 1);
                 if (own != NULL)
                 {
                     anim = own;
@@ -394,11 +428,16 @@ void Nis::Update(float dt)
         cPN_SAnimController* pController = mCharacterControllers[i];
         if (pController != nullptr)
         {
-            pController->Update(dt);
-            if (gNisCharOwner[i] == this && gNisSlotCtrl[i] != NULL)
+            // MOD (mixed teams): a face-off routine waits so it ends with the scene.
+            if (gNisCharOwner[i] == this && gNisDelay[i] > 0.0f)
             {
-                gNisSlotCtrl[i]->Update(dt); // MOD (mixed teams): the slot's placement keeps time too
+                gNisDelay[i] -= dt;
+                if (gNisDelay[i] > 0.0f)
+                {
+                    continue;
+                }
             }
+            pController->Update(dt);
         }
     }
 }
@@ -499,13 +538,10 @@ void Nis::Render()
 
         nlVector3 rootTrans = { 0.0f, 0.0f, 0.0f };
         u16 angle = 0;
-        // MOD (mixed teams): a borrowed captain is placed by the slot's animation.
-        cPN_SAnimController* pPlace = (gNisCharOwner[i] == this && gNisSlotCtrl[i] != NULL)
-            ? gNisSlotCtrl[i] : mCharacterControllers[i];
-        float fTime = pPlace->get_fTime();
-        pPlace->m_pSAnim->GetRootTrans(fTime, &rootTrans);
-        fTime = pPlace->get_fTime();
-        pPlace->m_pSAnim->GetRootRot(fTime, &angle);
+        float fTime = mCharacterControllers[i]->get_fTime();
+        mCharacterControllers[i]->m_pSAnim->GetRootTrans(fTime, &rootTrans);
+        fTime = mCharacterControllers[i]->get_fTime();
+        mCharacterControllers[i]->m_pSAnim->GetRootRot(fTime, &angle);
         if (mMirrored)
         {
             mCharacterControllers[i]->m_bMirror = true;
@@ -516,27 +552,56 @@ void Nis::Render()
         nlVec3Add(rootTrans, rootTrans, mHeader->stadiumOffset);
         nlVec3Add(rootTrans, rootTrans, offset);
 
-        // MOD (mixed teams): a borrowed captain's routine may carry its own
-        // placement in the body. On his first frame, measure where the slot's
-        // pose puts the hips versus where his own pose puts them, and shift by
-        // the difference from then on, so his hips sit where the sidekick's would.
-        if (gNisCharOwner[i] == this && gNisSlotCtrl[i] != NULL)
+        // MOD (mixed teams): borrowed captains with their own routine.
+        if (gNisCharOwner[i] == this && gNisMode[i] != NIS_MOD_NONE)
         {
-            if (!gNisHipFixDone[i])
+            if (gNisDelay[i] > 0.0f)
             {
-                pDC->EvaluateFrom(*gNisSlotCtrl[i], rootTrans, angle);
-                nlVector3 slotHip = pDC->mBip01Position;
-                pDC->EvaluateFrom(*mCharacterControllers[i], rootTrans, angle);
-                nlVector3 ownHip = pDC->mBip01Position;
-                gNisHipFix[i].x = slotHip.x - ownHip.x;
-                gNisHipFix[i].y = slotHip.y - ownHip.y;
-                gNisHipFix[i].z = 0.0f;
-                gNisHipFixDone[i] = true;
-                OSReport("[mixed teams] intro: character %d hips: slot (%.1f, %.1f) own (%.1f, %.1f) -> shift (%.1f, %.1f)\n",
-                         i, slotHip.x, slotHip.y, ownHip.x, ownHip.y, gNisHipFix[i].x, gNisHipFix[i].y);
+                pDC->mVisible = false; // not on yet
+                continue;
             }
-            nlVec3Add(rootTrans, rootTrans, gNisHipFix[i]);
+            if (gNisMode[i] == NIS_MOD_FACEOFF && !gNisShiftDone[i] && gNisSlotCtrl[i] != NULL)
+            {
+                // Where the sidekick's routine ends versus where his own ends,
+                // measured on the hips; the difference moves his whole routine.
+                cPN_SAnimController* slot = gNisSlotCtrl[i];
+                cPN_SAnimController* own = mCharacterControllers[i];
+                float slotEnd = slot->m_pSAnim->GetDuration();
+                float ownEnd = own->m_pSAnim->GetDuration();
+
+                nlVector3 sr = { 0.0f, 0.0f, 0.0f };
+                u16 sa = 0;
+                slot->m_pSAnim->GetRootTrans(slotEnd, &sr);
+                slot->m_pSAnim->GetRootRot(slotEnd, &sa);
+                if (mMirrored) { sr.x *= -1.0f; sa = sa + (0x4000 - sa) * 2; }
+                nlVec3Add(sr, sr, mHeader->stadiumOffset);
+                slot->SetTime(slotEnd);
+                pDC->EvaluateFrom(*slot, sr, sa);
+                nlVector3 slotHip = pDC->mBip01Position;
+
+                nlVector3 orr = { 0.0f, 0.0f, 0.0f };
+                u16 oa = 0;
+                own->m_pSAnim->GetRootTrans(ownEnd, &orr);
+                own->m_pSAnim->GetRootRot(ownEnd, &oa);
+                if (mMirrored) { orr.x *= -1.0f; oa = oa + (0x4000 - oa) * 2; }
+                nlVec3Add(orr, orr, mHeader->stadiumOffset);
+                float keep = own->get_fTime();
+                own->SetTime(ownEnd);
+                pDC->EvaluateFrom(*own, orr, oa);
+                nlVector3 ownHip = pDC->mBip01Position;
+                own->SetTime(keep);
+
+                gNisShift[i].x = slotHip.x - ownHip.x;
+                gNisShift[i].y = slotHip.y - ownHip.y;
+                gNisShift[i].z = 0.0f;
+                gNisShiftDone[i] = true;
+                OSReport("[mixed teams] intro: character %d face-off placed by (%.1f, %.1f)\n", i, gNisShift[i].x, gNisShift[i].y);
+            }
+            nlVector3 shift = gNisShift[i];
+            if (gNisMode[i] == NIS_MOD_WALK && mMirrored) { shift.x = -shift.x; }
+            nlVec3Add(rootTrans, rootTrans, shift);
         }
+
         pDC->EvaluateFrom(*mCharacterControllers[i], rootTrans, angle);
         pDC->BuildNodeMatrices();
         if (mBallId[i] >= 0 && numBalls < mHeader->numBalls
