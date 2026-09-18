@@ -72,7 +72,7 @@ static const unsigned char kPickerTeamRGB[9][3] = {
     { 170,  70, 230 }, // Waluigi, purple
     { 250, 225,  40 }, // Wario, yellow
     {  90, 200,  70 }, // Yoshi, green
-    { 140, 170, 215 }, // the robot: steel blue
+    {  70, 120, 255 }, // the robot: blue
 };
 
 static const char* PickerSidekickCell(eSidekickID sk)
