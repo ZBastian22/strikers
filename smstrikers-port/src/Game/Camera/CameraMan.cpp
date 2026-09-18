@@ -24,6 +24,7 @@
 #include "dolphin/pad.h"
 #include "NL/gl/glMatrix.h"
 #include "dolphin/os.h"
+#include <string.h>
 #include "Game/Net.h"
 #include "Game/WorldManager.h"
 #include "Game/AI/AiUtil.h"
@@ -144,6 +145,7 @@ static float gModCamPitch = 0.0f; // orbit height offset in the chase view, -1..
 static float gModCamZoom = 1.0f;  // zoom factor in the chase views, from the d-pad
 
 extern bool gModCamOwnsRightStick;
+extern void WorldSetDrawWholeStadium(bool on);
 extern f32 PlatPadRawRightX(int padIndex);
 extern f32 PlatPadRawRightY(int padIndex);
 
@@ -171,6 +173,27 @@ static void ModCamSmooth(nlVector3& cur, const nlVector3& goal, float k)
 static bool ModCameraApply(cBaseCamera* pCamera, nlMatrix4& matView, nlVector3& cameraPosition, float dt)
 {
     gModCamOwnsRightStick = false;
+    {
+        // Which presets show the whole stadium (the game camera never does).
+        BasicString<char, Detail::TempStringAllocator> list
+            = Config::Global().Get<BasicString<char, Detail::TempStringAllocator> >("cam_full_stadium_presets", BasicString<char, Detail::TempStringAllocator>("1,3,4,5"));
+        bool whole = false;
+        if (gModCamPreset != 0 && list.c_str() != NULL)
+        {
+            char want[4];
+            nlSNPrintf(want, 4, "%d", gModCamPreset);
+            const char* q = list.c_str();
+            while (*q)
+            {
+                while (*q == ' ' || *q == ',') ++q;
+                const char* e = q;
+                while (*e && *e != ',' && *e != ' ') ++e;
+                if ((int)(e - q) == (int)strlen(want) && strncmp(q, want, e - q) == 0) { whole = true; break; }
+                q = e;
+            }
+        }
+        WorldSetDrawWholeStadium(whole);
+    }
     if (gModCamPreset == 0 || pCamera == NULL || pCamera->GetType() != eCameraType_Gameplay)
     {
         return false;
