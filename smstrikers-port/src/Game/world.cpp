@@ -75,6 +75,14 @@ static unsigned char sbAllObjectsCanBeTransparent;
 static unsigned char sbOnlyRenderSpecificObject;
 static unsigned char sbPretendWereNotInGameplayCam;
 
+// MOD (camera): the near half of the stadium is hidden under the gameplay
+// camera (it would only ever be behind that camera). A camera preset that
+// looks back across the pitch asks for the whole stadium to be drawn.
+void WorldSetDrawWholeStadium(bool on)
+{
+    sbPretendWereNotInGameplayCam = on ? 1 : 0;
+}
+
 static LightObject fxLightObjects[4];
 
 /**
