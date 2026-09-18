@@ -56,6 +56,7 @@ static cPN_SAnimController* gNisSlotCtrl[10];    // the slot's animation: positi
 static Nis* gNisCharOwner[10];
 static nlVector3 gNisHipFix[10];                 // cancels any placement baked into the captain's body
 static bool gNisHipFixDone[10];
+static Nis* gNisHideOwner[10];                   // borrowed captains hidden in the face-off
 
 static bool NisNameInList(const char* list, const char* name)
 {
@@ -102,18 +103,26 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         return NULL;
     }
 
-    // A standing scene (the face-off) is one where the slot barely moves.
+    // A standing scene (the face-off) is one where the slot travels less than
+    // intro_standing_travel metres; the walk-in covers far more than that.
     nlVector3 a = { 0.0f, 0.0f, 0.0f };
     nlVector3 b = { 0.0f, 0.0f, 0.0f };
     slotAnim->GetRootTrans(0.0f, &a);
     slotAnim->GetRootTrans(slotAnim->GetDuration(), &b);
     float travel = sqrtf((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
-    bool standing = travel < 1.0f;
+    bool standing = travel < GetConfigFloat(cfg, "intro_standing_travel", 6.0f);
+    OSReport("[mixed teams] intro: '%s' slot travels %.1f -> %s scene\n", likeName, travel, standing ? "standing" : "walking");
     if (standing)
     {
+        if (GetConfigBool(cfg, "intro_faceoff_hide", false))
+        {
+            gNisHideOwner[charIndex] = owner; // drawn by nobody until this scene ends
+            OSReport("[mixed teams] intro: %s hidden for the face-off\n", charName);
+            return NULL;
+        }
         BasicString<char, Detail::TempStringAllocator> keep
-            = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_faceoff_generic", BasicString<char, Detail::TempStringAllocator>("mario,yoshi"));
-        if (NisNameInList(keep.c_str(), charName))
+            = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_faceoff_generic", BasicString<char, Detail::TempStringAllocator>("all"));
+        if (nlStrCmp<char>(keep.c_str() ? keep.c_str() : "", "all") == 0 || NisNameInList(keep.c_str(), charName))
         {
             OSReport("[mixed teams] intro: %s keeps the generic face-off routine\n", charName);
             return NULL;
@@ -251,6 +260,10 @@ Nis::Nis(NisHeader& header, char* data, int size)
                     gNisCharOwner[i] = NULL;
                     gNisSlotCtrl[i] = NULL;
                 }
+                if (gNisHideOwner[i] != this)
+                {
+                    gNisHideOwner[i] = NULL;
+                }
                 cSAnim* own = NisOwnIntroAnim(this, i, mTarget, mHeader->name, anim);
                 if (own != NULL)
                 {
@@ -302,6 +315,10 @@ Nis::~Nis()
     // MOD (mixed teams): drop any borrowed-captain intro files this cutscene owned.
     for (int i = 0; i < 10; i++)
     {
+        if (gNisHideOwner[i] == this)
+        {
+            gNisHideOwner[i] = NULL;
+        }
         if (gNisCharOwner[i] == this)
         {
             if (gNisCharBuffer[i] != NULL)
@@ -439,6 +456,11 @@ void Nis::Render()
         pDC = &snapshot.GetCharacter(i);
         if (mCharacterControllers[i] == NULL)
             continue;
+        if (gNisHideOwner[i] == this)
+        {
+            pDC->mVisible = false; // MOD (mixed teams): hidden for the face-off
+            continue;
+        }
         pDC->mVisible = true;
 
         nlVector3 rootTrans = { 0.0f, 0.0f, 0.0f };
