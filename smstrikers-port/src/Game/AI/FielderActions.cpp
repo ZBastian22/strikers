@@ -1,4 +1,5 @@
 #include "Game/AI/FielderActions.h"
+#include "NL/nlConfig.h"
 #include "Game/Camera/CameraMan.h"
 #include "Game/Camera/animcam.h"
 #include "Game/Camera/rumblefilter.h"
@@ -38,6 +39,24 @@
 #include "NL/nlMath.h"
 #include "NL/plat/plataudio.h"
 #include "types.h"
+
+// MOD (mixed teams): who may throw the cinematic Super Strike. Vanilla teams
+// are untouched. With mixed teams on, only the team's real captain (slot 1)
+// may - unless `super_all` opens it to every captain on the pitch.
+static bool MixedSuperAllowed(const cPlayer* pPlayer)
+{
+    Config& cfg = Config::Global();
+    if (!GetConfigBool(cfg, "mixed_teams", false))
+    {
+        return true;
+    }
+    if (GetConfigBool(cfg, "super_all", false))
+    {
+        return true;
+    }
+    return pPlayer->m_pTeam != NULL && pPlayer == pPlayer->m_pTeam->m_pPlayers[0];
+}
+
 
 static f32 CANT_COLLIDE = *(f32*)__float_max;
 
@@ -813,7 +832,7 @@ void cFielder::asmRunningWB(float fDeltaT)
 
             m_fDesiredSpeed = 0.0f;
 
-            float fTotalDuration = !IsCaptain() ? g_pGame->m_pGameTweaks->fShotWindupTime : m_pShotMeter->GetTotalDuration();
+            float fTotalDuration = (!IsCaptain() || !MixedSuperAllowed(this)) ? g_pGame->m_pGameTweaks->fShotWindupTime : m_pShotMeter->GetTotalDuration();
 
             float fTimeLeft = fTotalDuration - m_pShotMeter->m_fTime;
             if (fTimeLeft < 0.01f)
@@ -2868,7 +2887,7 @@ void cFielder::InitActionShootToScore()
 
     KillWindup(this, "ball_sts_windup", true);
 
-    if (IsCaptain() || nlSingleton<GameInfoManager>::Instance()->GetTeam((s16)m_pTeam->m_nSide) == 8)
+    if ((IsCaptain() && MixedSuperAllowed(this)) || nlSingleton<GameInfoManager>::Instance()->GetTeam((s16)m_pTeam->m_nSide) == 8)
     {
         mActionShootToScoreVars.isCaptainSts = true;
     }
