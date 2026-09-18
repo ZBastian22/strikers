@@ -58,6 +58,30 @@ static nlVector3 gNisHipFix[10];                 // cancels any placement baked 
 static bool gNisHipFixDone[10];
 static Nis* gNisHideOwner[10];                   // borrowed captains hidden in the face-off
 
+// True when any comma-separated token of list appears inside name.
+static bool NisTypeMatches(const char* list, const char* name)
+{
+    if (list == NULL || name == NULL) return false;
+    const char* p = list;
+    while (*p)
+    {
+        while (*p == ' ' || *p == ',') ++p;
+        const char* q = p;
+        while (*q && *q != ',' && *q != ' ') ++q;
+        if (q > p)
+        {
+            char tok[64];
+            size_t n = (size_t)(q - p);
+            if (n > 63) n = 63;
+            memcpy(tok, p, n);
+            tok[n] = 0;
+            if (strstr(name, tok) != NULL) return true;
+        }
+        p = q;
+    }
+    return false;
+}
+
 static bool NisNameInList(const char* list, const char* name)
 {
     if (list == NULL || name == NULL) return false;
@@ -103,15 +127,25 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         return NULL;
     }
 
-    // A standing scene (the face-off) is one where the slot travels less than
-    // intro_standing_travel metres; the walk-in covers far more than that.
+    // Which scene is this? The files are named by scene: the walk-in is
+    // "enter_stadium" / "establish_stadium", the face-off is "attitude".
+    // Anything else is left exactly as the game plays it.
+    BasicString<char, Detail::TempStringAllocator> walkTypes
+        = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_walk_scenes", BasicString<char, Detail::TempStringAllocator>("enter_stadium,establish_stadium"));
+    BasicString<char, Detail::TempStringAllocator> faceTypes
+        = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_faceoff_scenes", BasicString<char, Detail::TempStringAllocator>("attitude"));
+    bool standing = NisTypeMatches(faceTypes.c_str(), likeName);
+    bool walking = NisTypeMatches(walkTypes.c_str(), likeName);
+    if (!standing && !walking)
+    {
+        return NULL; // not an intro scene we touch
+    }
     nlVector3 a = { 0.0f, 0.0f, 0.0f };
     nlVector3 b = { 0.0f, 0.0f, 0.0f };
     slotAnim->GetRootTrans(0.0f, &a);
     slotAnim->GetRootTrans(slotAnim->GetDuration(), &b);
     float travel = sqrtf((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
-    bool standing = travel < GetConfigFloat(cfg, "intro_standing_travel", 6.0f);
-    OSReport("[mixed teams] intro: '%s' slot travels %.1f -> %s scene\n", likeName, travel, standing ? "standing" : "walking");
+    OSReport("[mixed teams] intro: '%s' -> %s scene (slot travels %.1f)\n", likeName, standing ? "face-off" : "walk-in", travel);
     if (standing)
     {
         if (GetConfigBool(cfg, "intro_faceoff_hide", false))
