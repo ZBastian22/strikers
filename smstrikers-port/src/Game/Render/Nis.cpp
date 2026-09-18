@@ -53,7 +53,7 @@ class EmissionController;
 extern char* NisLoadOwnFile(const char* charName, const char* likeName, const char* nisType, int* outSize, char* outName);
 extern const char* NisLastType(int target);
 
-enum { NIS_MOD_NONE = 0, NIS_MOD_WALK = 1, NIS_MOD_FACEOFF = 2 };
+enum { NIS_MOD_NONE = 0, NIS_MOD_WALK = 1, NIS_MOD_FACEOFF = 2, NIS_MOD_SLOT = 3 };
 
 static char* gNisCharBuffer[10];                 // the captain's own file, while in use
 static cPN_SAnimController* gNisSlotCtrl[10];    // the slot's animation, kept for measuring
@@ -64,6 +64,42 @@ static nlVector3 gNisShift[10];                  // added to the root, after mir
 static bool gNisShiftDone[10];
 static float gNisDelay[10];                      // seconds before the own routine starts
 static Nis* gNisHideOwner[10];                   // borrowed captains hidden in the face-off
+static char gNisOwnName[10][64];                 // the own file's name, for its voice script
+int gNisTriggerVoiceOnly = 0;                    // while set, AddTrigger keeps only character voice
+
+// The cutscene's idea of a character class, from the character's name.
+static NisCharacterClass NisClassOf(eCharacterClass cc)
+{
+    const char* n = GetCharacterName(cc);
+    if (n == NULL) return NIS_CHAR_CLASS_INVALID;
+    if (nlStrCmp<char>(n, "birdo") == 0) return NIS_CHAR_CLASS_BIRDO;
+    if (nlStrCmp<char>(n, "daisy") == 0) return NIS_CHAR_CLASS_DAISY;
+    if (nlStrCmp<char>(n, "donkeykong") == 0) return NIS_CHAR_CLASS_DONKEYKONG;
+    if (strncmp(n, "hammer", 6) == 0) return NIS_CHAR_CLASS_HAMMERBROS;
+    if (nlStrCmp<char>(n, "koopa") == 0) return NIS_CHAR_CLASS_KOOPA;
+    if (nlStrCmp<char>(n, "luigi") == 0) return NIS_CHAR_CLASS_LUIGI;
+    if (nlStrCmp<char>(n, "mario") == 0) return NIS_CHAR_CLASS_MARIO;
+    if (nlStrCmp<char>(n, "peach") == 0) return NIS_CHAR_CLASS_PEACH;
+    if (nlStrCmp<char>(n, "toad") == 0) return NIS_CHAR_CLASS_TOAD;
+    if (nlStrCmp<char>(n, "waluigi") == 0) return NIS_CHAR_CLASS_WALUIGI;
+    if (nlStrCmp<char>(n, "wario") == 0) return NIS_CHAR_CLASS_WARIO;
+    if (nlStrCmp<char>(n, "yoshi") == 0) return NIS_CHAR_CLASS_YOSHI;
+    return NIS_CHAR_CLASS_INVALID;
+}
+
+// For the voice scripts: the own file names of this cutscene's borrowed captains.
+int NisOwnFilesFor(const Nis* pNis, const char** outNames, int maxNames)
+{
+    int n = 0;
+    for (int i = 0; i < 10 && n < maxNames; i++)
+    {
+        if (gNisCharOwner[i] == pNis && gNisOwnName[i][0] != 0)
+        {
+            outNames[n++] = gNisOwnName[i];
+        }
+    }
+    return n;
+}
 
 // True when any comma-separated token of list appears inside name.
 static bool NisTypeMatches(const char* list, const char* name)
@@ -204,15 +240,27 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
     gNisCharBuffer[charIndex] = buffer;
     gNisSlotCtrl[charIndex] = ::new (AllocateSAnimController()) cPN_SAnimController(slotAnim, NULL, PM_HOLD, NULL, 0, false);
     gNisCharOwner[charIndex] = owner;
-    gNisMode[charIndex] = faceoff ? NIS_MOD_FACEOFF : NIS_MOD_WALK;
+    nlSNPrintf(gNisOwnName[charIndex], 64, "%s", szName);
+    bool standStill = walking && strstr(likeName, "establish") != NULL;
+    gNisMode[charIndex] = faceoff ? NIS_MOD_FACEOFF : (standStill ? NIS_MOD_SLOT : NIS_MOD_WALK);
     gNisSlotNumber[charIndex] = slotNumber;
     gNisShift[charIndex].x = gNisShift[charIndex].y = gNisShift[charIndex].z = 0.0f;
     gNisShiftDone[charIndex] = false;
     gNisDelay[charIndex] = 0.0f;
 
-    if (walking)
+    if (standStill)
     {
-        // Single file: his own path, moved back along it by gap * slot number.
+        // Overhead scene: nobody walks, and the sidekick marks are spread out
+        // by design. He stands on the sidekick's mark with his own body.
+        gNisShiftDone[charIndex] = true;
+        OSReport("[mixed teams] intro: character %d (%s) stands on the slot's mark with '%s'\n",
+                 charIndex, charName, szName);
+    }
+    else if (walking)
+    {
+        // Single file: his own path, moved back by gap * slot number, with a
+        // small left/right stagger so the line reads as a group. "Back" is the
+        // walk direction, or the way he faces at the end if he barely walks.
         nlVector3 a = { 0.0f, 0.0f, 0.0f };
         nlVector3 b = { 0.0f, 0.0f, 0.0f };
         own->GetRootTrans(0.0f, &a);
@@ -220,13 +268,29 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         float dx = b.x - a.x;
         float dy = b.y - a.y;
         float len = sqrtf(dx * dx + dy * dy);
-        if (len > 0.01f) { dx /= len; dy /= len; }
+        if (len >= 3.0f)
+        {
+            dx /= len; dy /= len;
+        }
+        else
+        {
+            u16 face = 0;
+            own->GetRootRot(own->GetDuration(), &face);
+            float rad = 0.0000958738f * (float)face;
+            dx = cosf(rad); dy = sinf(rad);
+        }
         float gap = GetConfigFloat(cfg, "intro_walk_gap", 2.5f);
-        gNisShift[charIndex].x = -dx * gap * (float)slotNumber;
-        gNisShift[charIndex].y = -dy * gap * (float)slotNumber;
+        if (target == NIS_TARGET_AWAY_SIDEKICK)
+        {
+            gap = GetConfigFloat(cfg, "intro_walk_gap_away", gap);
+        }
+        float stagger = GetConfigFloat(cfg, "intro_walk_stagger", 0.8f);
+        float side = (slotNumber % 2 == 1) ? -1.0f : 1.0f; // 1 left, 2 right, 3 left
+        gNisShift[charIndex].x = -dx * gap * (float)slotNumber + (-dy) * stagger * side;
+        gNisShift[charIndex].y = -dy * gap * (float)slotNumber + (dx) * stagger * side;
         gNisShiftDone[charIndex] = true;
-        OSReport("[mixed teams] intro: character %d (%s) walks in with '%s', %.1f m behind the leader\n",
-                 charIndex, charName, szName, gap * (float)slotNumber);
+        OSReport("[mixed teams] intro: character %d (%s) walks in with '%s', %.1f m behind the leader, %.1f m to the %s\n",
+                 charIndex, charName, szName, gap * (float)slotNumber, stagger, side < 0.0f ? "left" : "right");
     }
     else
     {
@@ -438,6 +502,10 @@ void Nis::Update(float dt)
                 }
             }
             pController->Update(dt);
+            if (gNisCharOwner[i] == this && gNisMode[i] == NIS_MOD_SLOT && gNisSlotCtrl[i] != NULL)
+            {
+                gNisSlotCtrl[i]->Update(dt); // MOD (mixed teams): the mark keeps time too
+            }
         }
     }
 }
@@ -538,10 +606,13 @@ void Nis::Render()
 
         nlVector3 rootTrans = { 0.0f, 0.0f, 0.0f };
         u16 angle = 0;
-        float fTime = mCharacterControllers[i]->get_fTime();
-        mCharacterControllers[i]->m_pSAnim->GetRootTrans(fTime, &rootTrans);
-        fTime = mCharacterControllers[i]->get_fTime();
-        mCharacterControllers[i]->m_pSAnim->GetRootRot(fTime, &angle);
+        // MOD (mixed teams): on the overhead scene a borrowed captain is placed by the slot.
+        cPN_SAnimController* pPlace = (gNisCharOwner[i] == this && gNisMode[i] == NIS_MOD_SLOT && gNisSlotCtrl[i] != NULL)
+            ? gNisSlotCtrl[i] : mCharacterControllers[i];
+        float fTime = pPlace->get_fTime();
+        pPlace->m_pSAnim->GetRootTrans(fTime, &rootTrans);
+        fTime = pPlace->get_fTime();
+        pPlace->m_pSAnim->GetRootRot(fTime, &angle);
         if (mMirrored)
         {
             mCharacterControllers[i]->m_bMirror = true;
@@ -630,6 +701,20 @@ nlVector3 Nis::Offset() const
  */
 void Nis::AddTrigger(NisTriggerType triggerType, float frameNumber, const char* name, const char* target, Nis::TriggerParams* trigParams)
 {
+    // MOD (mixed teams): a borrowed captain's own script only lends its voice.
+    if (gNisTriggerVoiceOnly)
+    {
+        bool voice = (triggerType == NIS_TRIGGER_TYPE_PLAY_RANDOM_DIALOGUE)
+            || (triggerType == NIS_TRIGGER_TYPE_PLAY_SOUND && trigParams != NULL && trigParams->param1 != (unsigned long)-1);
+        if (!voice)
+        {
+            return;
+        }
+    }
+    if (mNumTriggers >= MAX_NUM_TRIGGERS)
+    {
+        return;
+    }
     mTriggers[mNumTriggers].type = triggerType;
     mTriggers[mNumTriggers].frameNumber = frameNumber;
     mTriggers[mNumTriggers].name = name;
@@ -752,6 +837,27 @@ void Nis::Trigger::FireEffect(const Nis& nis) const
     }
 }
 
+// MOD (mixed teams): a voice line belongs in a cutscene if someone in it has
+// that class, or if no borrowed captain was swapped in (vanilla behaviour).
+static bool NisVoiceBelongsHere(const Nis& nis, NisCharacterClass cls)
+{
+    bool swapped = false;
+    for (int i = 0; i < 10; i++)
+    {
+        if (gNisCharOwner[i] == &nis) { swapped = true; break; }
+    }
+    if (!swapped || cls == NIS_CHAR_CLASS_INVALID)
+    {
+        return true;
+    }
+    for (int i = 0; i < 10; i++)
+    {
+        if (nis.mCharacterControllers[i] == NULL || g_pCharacters[i] == NULL) continue;
+        if (NisClassOf(((cPlayer*)g_pCharacters[i])->m_eCharacterClass) == cls) return true;
+    }
+    return false;
+}
+
 /**
  * Offset/Address/Size: 0x2D0 | 0x8012B6E0 | size: 0x564
  */
@@ -790,6 +896,11 @@ void Nis::Trigger::Fire(Nis& nis) const
         }
         else
         {
+            // MOD (mixed teams): no Toad lines from a slot that holds a captain.
+            if (!NisVoiceBelongsHere(nis, (NisCharacterClass)params.param1))
+            {
+                return;
+            }
             index = Audio::PlayCharSFXbyStr(name, (NisCharacterClass)params.param1, volume, -1.0f, true, false, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mBip01Position, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mVelocity, &soundType);
             isEmitter = true;
         }
@@ -808,6 +919,10 @@ void Nis::Trigger::Fire(Nis& nis) const
         uintptr_t index;   /* PORT: may hold an SFXEmitter* */
         bool stopAtNisEnd;
         unsigned long soundType = (unsigned long)-1;
+        if (!NisVoiceBelongsHere(nis, (NisCharacterClass)params.param1)) // MOD (mixed teams)
+        {
+            return;
+        }
         index = Audio::cCharacterSFX::PlayNISRandomCharDialogue((CharDialogueType)params.param2, (NisCharacterClass)params.param1, 100.0f, -1.0f, true, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mBip01Position, &ReplayManager::Instance()->GetMutableRenderSnapshot().GetCharacter(nis.mAudioCharacterIndex).mVelocity, &soundType);
         stopAtNisEnd = true;
         if (params.param3 != (unsigned long)-1)
