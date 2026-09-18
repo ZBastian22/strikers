@@ -117,6 +117,9 @@ fi
 
 cp strikers.ini.example "$OUT/"
 
+rm -rf "$OUT/input-prompts"
+cp -R assets/input-prompts "$OUT/input-prompts"
+
 if [ "$WINDOWS" = "1" ]; then
     BENCHMARK=benchmark.ps1
 else
@@ -137,7 +140,7 @@ FFMPEG_SHIPPED=0
 for _lib in "$OUT"/av*.[Dd][Ll][Ll] "$OUT"/libav*.dylib "$OUT"/libav*.so*; do
     if [ -f "$_lib" ]; then FFMPEG_SHIPPED=1; fi
 done
-if grep -q '^STRIKERS_FFMPEG_AVCODEC:FILEPATH=.*\.a$' "$BUILD/CMakeCache.txt" 2>/dev/null; then
+if grep -qE '^STRIKERS_FFMPEG_AVCODEC:FILEPATH=.*\.(a|lib)$' "$BUILD/CMakeCache.txt" 2>/dev/null; then
     FFMPEG_SHIPPED=1
 fi
 if [ "$FFMPEG_SHIPPED" = 1 ]; then
@@ -222,7 +225,7 @@ if [ -n "$SETTINGS_ARTEFACT" ]; then
 fi
 
 # What the archive has to contain, by name, checked before it is made and again after.
-NEEDED_FILES="$(basename "$BIN") strikers.ini.example $BENCHMARK
+NEEDED_FILES="$(basename "$BIN") strikers.ini.example $BENCHMARK input-prompts/LICENSE-Kenney.txt
               LICENSE-BSD.TXT LICENSE-CC0.txt LICENSE-GPL-2.0.txt LICENSE-MUSYX.txt"
 if [ "$FFMPEG_SHIPPED" = 1 ]; then
     NEEDED_FILES="$NEEDED_FILES LICENSE-LGPL-2.1.txt"

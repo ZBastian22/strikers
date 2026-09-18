@@ -521,7 +521,7 @@ static bool vsync_state()
     {
         s_vsyncRead = true;
         const char* e = std::getenv("STRIKERS_VSYNC");
-        s_vsyncOn = !(e != nullptr && std::strcmp(e, "0") == 0);
+        s_vsyncOn = e != nullptr && *e != '\0' && std::strtoul(e, nullptr, 10) != 0;
     }
     return s_vsyncOn;
 }
@@ -533,7 +533,7 @@ static void set_vsync(bool on)
     aurora_enable_vsync(on);
     double displayHz = 0.0;
     PortFrameLimitInfo(nullptr, &displayHz, nullptr, nullptr);
-    PortSetDisplayRefresh(displayHz, on ? 1 : 0);
+    PortSetDisplayRefresh(displayHz, aurora_present_waits_for_vblank() ? 1 : 0);
 }
 
 // The game's lockstep switch, with what it means said out loud: one 20 ms step per rendered frame
@@ -568,6 +568,10 @@ static int platform_command(const PortDebugCommand& c)
         return 1;
     case PDBG_SET_LOCKSTEP:
         set_lockstep(c.a != 0);
+        return 1;
+    case PDBG_SET_DT_SNAP:
+        PortSetTaskClockSnap(c.a);
+        std::fprintf(stderr, "[limiter] task step snapping %s\n", c.a < 0 ? "follows STRIKERS_DT_SNAP" : c.a ? "on" : "off");
         return 1;
     case PDBG_SET_WINDOW:
     {

@@ -1,3 +1,4 @@
+#include "port/prompts.h"
 #include "port/region.h"  // PORT: one binary, three discs
 #include "types.h"
 #include "NL/nlBind.h"
@@ -6,16 +7,19 @@
 
 #if defined(PORT_USE_AURORA)
 #include <aurora/aurora.h>
+#include <aurora/gfx.h>   // aurora_present_waits_for_vblank
 #include <dolphin/gx/GXAurora.h>   // AuroraSetViewportPolicy
 #include <dolphin/vi.h>                // VILockAspectRatio
 #include "port/aspect.h"
 #include "port/framerate.h"
+#include "port/host.h"   // port_monotonic_ns
 #if defined(PORT_USE_AURORA)
 #include <SDL3/SDL_video.h>
 #endif
 #include "port/overlay.h"
 extern "C" void PortDebugFrame(void);   // PORT: defined in Game.cpp
 #include "port/launch.h"
+#include "port/shaders.h"   // PORT: the shader stage, held on the memory card screen
 #include <aurora/main.h>   // #define main aurora_main
 #include <aurora/event.h>
 #include <stdio.h>   // PORT: snprintf
@@ -370,11 +374,20 @@ static void Initialize()
     }
     else if (diskid->gameName[0] == 'G' && diskid->gameName[1] == '4' && diskid->gameName[2] == 'Q' && diskid->gameName[3] == 'J')
     {
-        g_Language = nlLocalization::LangJapanese;
+        // PORT: the Japanese disc carries every language's strings, fonts and menus, so `language` picks one; unset is Japanese.
+        static const nlLocalization::nlLanguage kJapaneseDisc[] = {
+            nlLocalization::LangEnglish, nlLocalization::LangGerman,  nlLocalization::LangFrench,
+            nlLocalization::LangSpanish, nlLocalization::LangItalian, nlLocalization::LangJapanese,
+        };
+        const int language = port_language();
+        g_Language = language >= 0 ? kJapaneseDisc[language] : nlLocalization::LangJapanese;
     }
     else if (diskid->gameName[0] == 'G' && diskid->gameName[1] == '4' && diskid->gameName[2] == 'Q' && diskid->gameName[3] == 'E')
     {
         g_Language = nlLocalization::LangEnglish;
+        // PORT: the American disc has English only, so a `language` line is reported as ignored.
+        if (port_language() >= 0)
+            OSReport("[port] language: ignored, the American disc plays in English\n");
     }
     else
     {
@@ -414,6 +427,7 @@ static void Initialize()
             g_Language = nlLocalization::LangLongestStrings;
         }
     }
+    OSReport("[port] language: %s\n", nlLocalization::LanguageName[g_Language]);   // PORT: which table the disc and `language` chose
 
     LoadMemoryCardIconData();
 
@@ -641,9 +655,8 @@ static void PortFollowDisplayRefresh()
         return;
     const SDL_DisplayMode* mode =
         SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s_portWindow));
-    int vsync = 0;
-    PortFrameLimitInfo(NULL, NULL, &vsync, NULL);
-    PortSetDisplayRefresh(mode != NULL ? (double)mode->refresh_rate : 0.0, vsync);
+    PortSetDisplayRefresh(mode != NULL ? (double)mode->refresh_rate : 0.0,
+                          aurora_present_waits_for_vblank() ? 1 : 0);
 }
 
 static void PortPumpAuroraEvents()
@@ -680,6 +693,9 @@ static void PortPumpAuroraEvents()
             PortOverlayHandleKey((int)ev->sdl.key.scancode,
                                  ev->sdl.type == SDL_EVENT_KEY_DOWN ? 1 : 0);
         }
+
+        if (ev->type == AURORA_SDL_EVENT)
+            PortPromptsEvent(&ev->sdl); // PORT: button prompts
 
         // PORT: the limiter follows the display the window is on, which can move or change mode.
         if (ev->type == AURORA_SDL_EVENT
@@ -760,8 +776,7 @@ int main(int argc, char* argv[])
         // 1080p, 16:9: the logical framebuffer follows the display aspect, so a 16:9 window is filled rather than pillarboxed.
         cfg.windowWidth = 1920;
         cfg.windowHeight = 1080;
-        // Vsync. STRIKERS_VSYNC=0 selects Mailbox or Immediate instead, which is what lets the frame rate exceed the display's.
-        cfg.vsync = PortEnvU32("STRIKERS_VSYNC", 1) != 0;
+        cfg.vsync = PortEnvU32("STRIKERS_VSYNC", 0) != 0;
 
         // STRIKERS_MSAA sets the sample count and can only be chosen here. 1 by default: 4x costs an Intel N100 half its frame rate.
         cfg.msaa = (uint32_t)PortEnvU32("STRIKERS_MSAA", 1);
@@ -780,8 +795,9 @@ int main(int argc, char* argv[])
             const SDL_DisplayMode* mode =
                 SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(info.window));
             // 0 for "unknown", refresh_rate is documented as 0.0f when the mode does not report one.
+            // PORT: with vsync off, a surface that cannot skip the wait still waits for the display's refresh.
             PortSetDisplayRefresh(mode != NULL ? (double)mode->refresh_rate : 0.0,
-                                  cfg.vsync ? 1 : 0);
+                                  aurora_present_waits_for_vblank() ? 1 : 0);
             // PORT: kept for the event pump, which re-derives the rate when the display changes.
             s_portWindow = info.window;
         }
@@ -848,16 +864,26 @@ int main(int argc, char* argv[])
     }
 
 #if defined(PORT_USE_AURORA)
+    PortShaderStageBegin();   // PORT: logs the pipeline queue the boot memory card screen waits for
+
     while (s_portRunning && !PortQuitRequested())
     {
+        // PORT: the deferred limiter sleep goes before the event pump so the frame reads input after it.
+        PortLimiterFlush();
+        PortBenchInputPumped();
         PortPumpAuroraEvents();
         PortUpdateSyntheticInput(s_portFrame);
         PortDebugFrame();
 
+        // PORT: timed, since the swapchain acquire blocks inside aurora_begin_frame under vsync.
+        const unsigned long long acquireStart = port_monotonic_ns();
         if (!aurora_begin_frame())
             continue;              // minimised or surface lost; nothing to draw
+        const unsigned long long acquireNs = port_monotonic_ns() - acquireStart;
 
+        PortPromptsFrame(); // PORT: button prompts
         PortBenchFrameBegin();
+        PortBenchAddAcquire(acquireNs);
 
         // Sample the pad before the tasks that read it. main() registers VBlankPadUpdate through PADSetSamplingCallback.
         PortInvokePadSamplingCallback();

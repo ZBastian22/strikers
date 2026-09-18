@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(smstrikers-port CXX C)
+include(cmake/StrikersVersion.cmake)
 
 # Super Mario Strikers, native port Targets macOS (arm64 and x86_64) first, but nothing here is
 # Darwin-specific: the platform surface is confined to src/platform/ and to Aurora, both of which
@@ -372,6 +373,9 @@ target_link_libraries(strikers PRIVATE port_flags strikers_lua)
 # checked in; the build only compiles the resource.
 if(WIN32)
     target_sources(strikers PRIVATE assets/icon/strikers.rc)
+    set_source_files_properties(assets/icon/strikers.rc PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_BINARY_DIR}/version"
+        OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/version/strikers_version.h")
 
     # /ENTRY:mainCRTStartup keeps main() as the entry point of a GUI-subsystem executable.
     set_target_properties(strikers PROPERTIES WIN32_EXECUTABLE TRUE)
@@ -382,11 +386,12 @@ endif()
 
 # The name macOS shows in the menu bar, from assets/macos/Info.plist.
 if(APPLE)
+    configure_file(assets/macos/Info.plist "${CMAKE_CURRENT_BINARY_DIR}/Info.plist" @ONLY)
     target_link_options(strikers PRIVATE
-        "-Wl,-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_SOURCE_DIR}/assets/macos/Info.plist")
+        "-Wl,-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_BINARY_DIR}/Info.plist")
     # Relink when the plist changes; a link option is not a dependency.
     set_property(TARGET strikers APPEND PROPERTY
-        LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/macos/Info.plist")
+        LINK_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/Info.plist")
 endif()
 
 option(STRIKERS_FFMPEG "Decode THP movies with libavcodec" ON)
@@ -397,7 +402,7 @@ set(_ff_static "${CMAKE_CURRENT_SOURCE_DIR}/extern/ffmpeg-static")
 if(STRIKERS_FFMPEG)
     find_package(PkgConfig QUIET)
     if(PKG_CONFIG_FOUND AND NOT STRIKERS_FFMPEG_ROOT AND NOT DEFINED ENV{STRIKERS_FFMPEG_ROOT}
-       AND NOT EXISTS "${_ff_static}/lib/libavcodec.a")
+       AND NOT EXISTS "${_ff_static}/lib/libavcodec.a" AND NOT EXISTS "${_ff_static}/lib/avcodec.lib")
         if(APPLE AND EXISTS "/opt/homebrew/opt/ffmpeg/lib/pkgconfig")
             set(ENV{PKG_CONFIG_PATH}
                 "/opt/homebrew/opt/ffmpeg/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
@@ -469,14 +474,22 @@ elseif(STRIKERS_FFMPEG)
         target_include_directories(strikers_platform PRIVATE "${STRIKERS_FFMPEG_INCLUDE_DIR}")
         target_link_libraries(strikers PRIVATE
             "${STRIKERS_FFMPEG_AVCODEC}" "${STRIKERS_FFMPEG_AVUTIL}")
-        if(STRIKERS_FFMPEG_AVCODEC MATCHES "\\.a$")
+        string(FIND "${STRIKERS_FFMPEG_AVCODEC}" "${_ff_static}/" _ff_static_at)
+        if(STRIKERS_FFMPEG_AVCODEC MATCHES "\\.a$" OR _ff_static_at EQUAL 0)
+            set(_ff_is_static TRUE)
+        else()
+            set(_ff_is_static FALSE)
+        endif()
+        if(_ff_is_static AND WIN32)
+            target_link_libraries(strikers PRIVATE bcrypt)
+        elseif(_ff_is_static)
             # A static libavcodec leaves its libm and thread references for the executable to resolve.
             find_package(Threads REQUIRED)
             target_link_libraries(strikers PRIVATE m Threads::Threads)
         endif()
         message(STATUS "THP movies: libavcodec ${_ff_version} (${STRIKERS_FFMPEG_AVCODEC})")
 
-        if(WIN32)
+        if(WIN32 AND NOT _ff_is_static)
             # An import library is not a runtime: linking avcodec.lib without avcodec-NN.dll beside
             # it does not start. Copied at build time, and package.sh takes the same files. These
             # three, from avcodec's import table.

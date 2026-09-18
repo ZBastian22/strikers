@@ -38,6 +38,7 @@
 #include <QScrollArea>
 #include <QSettings>
 #include <QSlider>
+#include <QStandardItemModel>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -46,6 +47,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
+
+#include "port/steamdeck.h"
 
 namespace {
 
@@ -89,6 +92,11 @@ const Setting& byKey(const QVector<Setting>& group, const char* k)
     return group.first();
 }
 
+bool isGlBackend(const QString& backend)
+{
+    return backend == QLatin1String("opengl") || backend == QLatin1String("opengles");
+}
+
 bool backendSupportedHere(const QString& backend)
 {
     if (backend.isEmpty())
@@ -98,7 +106,7 @@ bool backendSupportedHere(const QString& backend)
 #elif defined(Q_OS_MACOS)
     return backend == QLatin1String("metal");
 #else
-    return backend == QLatin1String("vulkan");
+    return backend == QLatin1String("vulkan") || isGlBackend(backend);
 #endif
 }
 
@@ -312,8 +320,10 @@ QComboBox* MainWindow::addChoice(SettingsPage* page, const Setting& s)
             {
                 // A value the file has and the combo does not: keep it rather than silently
                 // rewriting the user's file on the next save.
-                combo->addItem(MainWindow::tr("%1 (from the file)").arg(v), v);
-                i = combo->count() - 1;
+                i = combo->count();
+                while (i > 0 && isGlBackend(combo->itemData(i - 1).toString()))
+                    --i;
+                combo->insertItem(i, MainWindow::tr("%1 (from the file)").arg(v), v);
             }
             combo->setCurrentIndex(i);
         });
@@ -330,15 +340,31 @@ QWidget* MainWindow::buildDisplayTab()
     {
         const Setting& s = byKey(group, "res_scale");
         auto* combo = new QComboBox;
-        combo->addItem(tr("Automatic (follows the window)"), QString());
-        static const struct { int rows; const char* name; } kResolutions[] = {
-            { 448, "GameCube" }, { 480, "480p" },   { 540, "540p" },   { 576, "576p" },
-            { 720, "720p" },     { 900, "900p" },   { 1080, "1080p" }, { 1440, "1440p" },
-            { 1800, nullptr },   { 2160, "4K" },    { 2880, "5K" },
+        // The game renders the panel's rows on a Deck when this is left unset.
+        combo->addItem(PortIsSteamDeck() ? tr("Automatic (Steam Deck, 1280×800)")
+                                         : tr("Automatic (follows the window)"),
+                       QString());
+        // One entry per height, since the height is all the value holds; the width names the display it is known from.
+        static const struct { int width; int rows; const char* name; } kResolutions[] = {
+            { 640, 448, "GameCube" },
+            { 854, 480, "480p" },
+            { 960, 540, "540p" },
+            { 1024, 576, "576p" },
+            { 1280, 720, "720p" },
+            { 1366, 768, nullptr },
+            { PORT_STEAM_DECK_WIDTH, PORT_STEAM_DECK_ROWS, "Steam Deck" },
+            { 1600, 900, "900p" },
+            { 1920, 1080, "1080p" },
+            { 1920, 1200, nullptr },
+            { 2560, 1440, "1440p" },
+            { 2560, 1600, nullptr },
+            { 3200, 1800, nullptr },
+            { 3840, 2160, "4K" },
+            { 5120, 2880, "5K" },
         };
         for (const auto& r : kResolutions)
         {
-            const QString size = QStringLiteral("%1×%2").arg(qRound(r.rows * 16.0 / 9.0)).arg(r.rows);
+            const QString size = QStringLiteral("%1×%2").arg(r.width).arg(r.rows);
             combo->addItem(r.name != nullptr ? QStringLiteral("%1 (%2)").arg(size, QLatin1String(r.name))
                                              : size,
                            trimScale(double(r.rows) / 448.0));
@@ -360,8 +386,7 @@ QWidget* MainWindow::buildDisplayTab()
             const bool automatic = combo->currentIndex() <= 0;
             rowsNote->setText(isCustom()
                                   ? tr("Renders %1 rows.").arg(qRound(spin->value() * 448.0))
-                                  : tr("The height is exact. The width shown is for 16:9 and "
-                                       "follows the aspect ratio."));
+                                  : tr("The height is exact. The width follows the aspect ratio."));
             rowsNote->setVisible(!automatic);
         };
         connect(combo, &QComboBox::currentIndexChanged, this, [this, spin, isCustom, showRows] {
@@ -495,13 +520,17 @@ QWidget* MainWindow::buildDisplayTab()
         {
             const QString v = combo->itemData(i).toString();
             if (backendSupportedHere(v))
+            {
+                if (isGlBackend(v))
+                    combo->setItemText(i, tr("%1 (experimental)").arg(combo->itemText(i)));
                 continue;
+            }
             combo->setItemData(i, QVariant(0), Qt::UserRole - 1); // disable the item
             combo->setItemText(i, tr("%1 (not on this computer)").arg(combo->itemText(i)));
         }
     }
 
-    addSwitch(page, byKey(group, "fullscreen"));
+    addChoice(page, byKey(group, "fullscreen"));
     addSwitch(page, byKey(group, "pause_on_focus_lost"));
 
     page->finish();
@@ -866,8 +895,7 @@ QWidget* MainWindow::buildGameTab()
 
     page->beginSection(tr("Options"));
 
-    // The combo's first entry writes nothing: the console's own default is English, and a file with
-    // no `language` line gets exactly that.
+    // The combo's first entry writes nothing, which leaves each disc its own language.
     m_language = addChoice(page, Schema::get(QStringLiteral("language")));
     m_languageState = SettingsPage::note(QString());
     page->addFieldNote(m_languageState);
@@ -1506,24 +1534,33 @@ void MainWindow::updateDataState()
     }
 }
 
-// Only Mario Smash Football (G4QP01) asks the console for a language, so the combo is greyed out
-// under any other disc rather than left looking like it works.
+// Greyed out under the American disc, which has one language; Japanese needs the Japanese disc's own menus.
 void MainWindow::updateLanguageState(const QString& gameId)
 {
     if (m_language == nullptr || m_languageState == nullptr)
         return;
 
     const bool european = gameId.startsWith(QStringLiteral("G4QP"));
+    const bool japanese = gameId.startsWith(QStringLiteral("G4QJ"));
     const bool known = !gameId.isEmpty();
-    m_language->setEnabled(!known || european);
+    m_language->setEnabled(!known || european || japanese);
+
+    if (auto* model = qobject_cast<QStandardItemModel*>(m_language->model()))
+    {
+        const int i = m_language->findData(QStringLiteral("japanese"));
+        if (QStandardItem* item = i >= 0 ? model->item(i) : nullptr)
+            item->setEnabled(!known || japanese);
+    }
+
     if (!known)
-        m_languageState->setText(tr("Read by the European release only."));
+        m_languageState->setText(tr("Read by the European and Japanese releases."));
     else if (european)
         m_languageState->setText(tr("This copy is the European release, so this applies."));
+    else if (japanese)
+        m_languageState->setText(tr("This copy is the Japanese release, so this applies."));
     else
         m_languageState->setText(
-            tr("This copy is the %1 release, which has one language of its own.")
-                .arg(gameId.startsWith(QStringLiteral("G4QJ")) ? tr("Japanese") : tr("American")));
+            tr("This copy is the %1 release, which has one language of its own.").arg(tr("American")));
 }
 
 void MainWindow::setDirty(bool dirty)
