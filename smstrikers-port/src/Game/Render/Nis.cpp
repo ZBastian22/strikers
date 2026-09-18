@@ -54,6 +54,8 @@ extern const char* NisLastType(int target);
 static char* gNisCharBuffer[10];                 // the captain's own file, while in use
 static cPN_SAnimController* gNisSlotCtrl[10];    // the slot's animation: position and facing
 static Nis* gNisCharOwner[10];
+static nlVector3 gNisHipFix[10];                 // cancels any placement baked into the captain's body
+static bool gNisHipFixDone[10];
 
 static bool NisNameInList(const char* list, const char* name)
 {
@@ -155,6 +157,8 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
     gNisCharBuffer[charIndex] = buffer;
     gNisSlotCtrl[charIndex] = ::new (AllocateSAnimController()) cPN_SAnimController(slotAnim, NULL, PM_HOLD, NULL, 0, false);
     gNisCharOwner[charIndex] = owner;
+    gNisHipFixDone[charIndex] = false;
+    gNisHipFix[charIndex].x = gNisHipFix[charIndex].y = gNisHipFix[charIndex].z = 0.0f;
     OSReport("[mixed teams] intro: character %d (%s) plays '%s' at the %s slot's position (%s scene, slot travels %.1f)\n",
              charIndex, charName, szName, likeName, standing ? "standing" : "walking", travel);
     return own;
@@ -456,6 +460,27 @@ void Nis::Render()
         nlVec3Add(rootTrans, rootTrans, mHeader->stadiumOffset);
         nlVec3Add(rootTrans, rootTrans, offset);
 
+        // MOD (mixed teams): a borrowed captain's routine may carry its own
+        // placement in the body. On his first frame, measure where the slot's
+        // pose puts the hips versus where his own pose puts them, and shift by
+        // the difference from then on, so his hips sit where the sidekick's would.
+        if (gNisCharOwner[i] == this && gNisSlotCtrl[i] != NULL)
+        {
+            if (!gNisHipFixDone[i])
+            {
+                pDC->EvaluateFrom(*gNisSlotCtrl[i], rootTrans, angle);
+                nlVector3 slotHip = pDC->mBip01Position;
+                pDC->EvaluateFrom(*mCharacterControllers[i], rootTrans, angle);
+                nlVector3 ownHip = pDC->mBip01Position;
+                gNisHipFix[i].x = slotHip.x - ownHip.x;
+                gNisHipFix[i].y = slotHip.y - ownHip.y;
+                gNisHipFix[i].z = 0.0f;
+                gNisHipFixDone[i] = true;
+                OSReport("[mixed teams] intro: character %d hips: slot (%.1f, %.1f) own (%.1f, %.1f) -> shift (%.1f, %.1f)\n",
+                         i, slotHip.x, slotHip.y, ownHip.x, ownHip.y, gNisHipFix[i].x, gNisHipFix[i].y);
+            }
+            nlVec3Add(rootTrans, rootTrans, gNisHipFix[i]);
+        }
         pDC->EvaluateFrom(*mCharacterControllers[i], rootTrans, angle);
         pDC->BuildNodeMatrices();
         if (mBallId[i] >= 0 && numBalls < mHeader->numBalls
