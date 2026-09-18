@@ -30,6 +30,7 @@ static bool gPickerOn = false;
 static int gPickCount[2];          // -1 = captain not chosen yet, 0..3 = teammates picked
 static char gPickNames[2][3][20];
 static bool gPickedASidekick[2];
+static bool gPickToggled[2];       // the sidekick grid is showing because X was pressed
 
 // Picked faces are tinted in the picked character's colour, the way the game
 // blacks out a taken captain (the face's own colour multiplied down): Mario
@@ -210,7 +211,8 @@ static bool PickerRestoreSide(IChooseCaptain* p, int side)
     {
         return true;
     }
-    if (p->mComponentState[side].mCurrentPhase != PHASE_READY || p->mHomeAwayTeam[side] == 8)
+    IChooseCaptain::ComponentState::Phase rph = p->mComponentState[side].mCurrentPhase;
+    if ((rph != PHASE_READY && rph != PHASE_CHOOSING_SIDEKICK) || p->mHomeAwayTeam[side] == 8)
     {
         OSReport("[mixed teams] picker: side %d not restorable (phase %d, team %d)\n",
                  side, (int)p->mComponentState[side].mCurrentPhase, p->mHomeAwayTeam[side]);
@@ -343,6 +345,7 @@ static void MixedPickerReset()
     gPickerOn = GetConfigBool(cfg, "mixed_teams", false) && GetConfigBool(cfg, "mixed_picker", false);
     gPickCount[0] = gPickCount[1] = -1;
     gPickedASidekick[0] = gPickedASidekick[1] = false;
+    gPickToggled[0] = gPickToggled[1] = false;
     for (int i = 0; i < 2; ++i)
     {
         for (int k = 0; k < 4; ++k)
@@ -373,7 +376,10 @@ static void MixedPickerCaptainGridOut(IChooseCaptain* p, int side)
     cg->RebuildInstanceTable();
     cg->mMapMenu->UpdateAllItems();
     cg->RebindHighliteComponent("HIGHLIGHT");
-    cg->mHighliteComponent->m_bVisible = false;
+    if (cg->mHighliteComponent != NULL)
+    {
+        cg->mHighliteComponent->m_bVisible = false;
+    }
     FEAudio::PlayAnimAudioEvent((side == 0) ? "sfx_character_group_left_exit" : "sfx_character_group_right_exit", false);
 }
 
@@ -386,7 +392,10 @@ static void MixedPickerSidekickGridIn(IChooseCaptain* p, int side)
     sg->RebuildInstanceTable();
     sg->mMapMenu->UpdateAllItems();
     sg->RebindHighliteComponent("HIGHLIGHT");
-    sg->mHighliteComponent->m_bVisible = false;
+    if (sg->mHighliteComponent != NULL)
+    {
+        sg->mHighliteComponent->m_bVisible = false;
+    }
     sg->mHighliteVisibilityAtAnimEnd = true;
     sg->SetVisibleInstanceTable(true);
     sg->mParentComponent->m_bVisible = true;
@@ -402,7 +411,10 @@ static void MixedPickerSidekickGridOut(IChooseCaptain* p, int side)
     sg->RebuildInstanceTable();
     sg->mMapMenu->UpdateAllItems();
     sg->RebindHighliteComponent("HIGHLIGHT");
-    sg->mHighliteComponent->m_bVisible = false;
+    if (sg->mHighliteComponent != NULL)
+    {
+        sg->mHighliteComponent->m_bVisible = false;
+    }
     FEAudio::PlayAnimAudioEvent((side == 0) ? "sfx_character_group_left_exit" : "sfx_character_group_right_exit", false);
 }
 
@@ -410,6 +422,11 @@ static void MixedPickerSidekickGridOut(IChooseCaptain* p, int side)
 // the big captain portrait, and stand ready.
 static void MixedPickerFinish(IChooseCaptain* p, int side)
 {
+    // The game greys "the other side's highlighted face" as that side's
+    // captain, so park this side's highlight on its captain, not its last pick.
+    p->mCaptainGridComponents[side]->MoveHighlightToTarget((eTeamID)p->mHomeAwayTeam[side]);
+    gPickToggled[side] = false;
+
     if (p->mComponentState[side].mCurrentPhase == PHASE_CHOOSING_SIDEKICK)
     {
         MixedPickerSidekickGridOut(p, side);
@@ -616,6 +633,7 @@ static bool MixedPickerBack(IChooseCaptain* p, int side)
             p->mCaptainGridComponents[side]->mMapMenu->GetSelectedItem(), true);
         if (ph == PHASE_CHOOSING_SIDEKICK)
         {
+            gPickToggled[side] = false;
             p->mComponentState[side].GotoPreviousPhase(); // back to the captain grid
         }
         else
@@ -651,8 +669,10 @@ static void MixedPickerToggle(IChooseCaptain* p, int side)
     }
 
     IChooseCaptain::ComponentState::Phase ph = p->mComponentState[side].mCurrentPhase;
+    OSReport("[mixed teams] picker: X side=%d phase=%d count=%d\n", side, (int)ph, gPickCount[side]);
     if (ph == PHASE_CHOOSING_CAPTAIN)
     {
+        gPickToggled[side] = true;
         MixedPickerCaptainGridOut(p, side);
         MixedPickerSidekickGridIn(p, side);
         p->mComponentState[side].mCurrentPhase = PHASE_CHOOSING_SIDEKICK;
@@ -666,7 +686,36 @@ static void MixedPickerToggle(IChooseCaptain* p, int side)
     }
     else if (ph == PHASE_CHOOSING_SIDEKICK)
     {
+        gPickToggled[side] = false;
         p->mComponentState[side].GotoPreviousPhase(); // vanilla restores the captain grid
+    }
+}
+
+// Coming back from the side-select screen, the game parks a finished side on
+// the sidekick screen. A side with all four picks belongs locked in instead.
+static void MixedPickerRepairAfterReturn(IChooseCaptain* p)
+{
+    if (!MixedPickerOn())
+    {
+        return;
+    }
+    for (int side = 0; side < 2; ++side)
+    {
+        if (p->mComponentState[side].mCurrentPhase != PHASE_CHOOSING_SIDEKICK || gPickToggled[side])
+        {
+            continue;
+        }
+        if (gPickCount[side] == 3 || PickerRestoreSide(p, side))
+        {
+            OSReport("[mixed teams] picker: side %d back from side-select; reopening its fourth pick\n", side);
+            // The game's own "sidekick accepted" step knows how to leave the
+            // screen it parked us on; then the picker steps back to the
+            // captain grid with the last teammate up for re-picking.
+            p->mComponentState[side].GotoNextPhase();
+            MixedPickerReadyToCaptainGrid(p, side);
+            gPickCount[side] = 2;
+            PickerRetintSide(p, side);
+        }
     }
 }
 
@@ -775,6 +824,7 @@ void IChooseCaptain::UpdateSound(float dt)
 UpdateResult IChooseCaptain::Update(float dt)
 {
     PickerTickTints(dt); // MOD (mixed teams): tint fades
+    MixedPickerRepairAfterReturn(this);
 
     CheckForDisconnectedHumanPlayers();
     FindAliveHumanPlayers();
