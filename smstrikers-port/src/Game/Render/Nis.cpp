@@ -148,7 +148,7 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
     {
         return NULL;
     }
-    if (target != NIS_TARGET_HOME_SIDEKICK && target != NIS_TARGET_AWAY_SIDEKICK)
+    if (target != NIS_TARGET_HOME_SIDEKICK && target != NIS_TARGET_AWAY_SIDEKICK && target != NIS_TARGET_LOSER_SIDEKICK)
     {
         return NULL;
     }
@@ -175,11 +175,15 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_walk_scenes", BasicString<char, Detail::TempStringAllocator>("enter_stadium,establish_stadium"));
     BasicString<char, Detail::TempStringAllocator> faceTypes
         = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_faceoff_scenes", BasicString<char, Detail::TempStringAllocator>("attitude"));
+    BasicString<char, Detail::TempStringAllocator> markTypes
+        = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_mark_scenes", BasicString<char, Detail::TempStringAllocator>("loser"));
     bool faceoff = NisTypeMatches(faceTypes.c_str(), likeName);
     bool walking = NisTypeMatches(walkTypes.c_str(), likeName);
-    if (!faceoff && !walking)
+    bool onMark = !faceoff && !walking && NisTypeMatches(markTypes.c_str(), likeName)
+                  && GetConfigBool(cfg, "reaction_own_anims", true);
+    if (!faceoff && !walking && !onMark)
     {
-        return NULL; // not an intro scene we touch
+        return NULL; // not a scene we touch
     }
 
     if (faceoff)
@@ -241,7 +245,7 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
     gNisSlotCtrl[charIndex] = ::new (AllocateSAnimController()) cPN_SAnimController(slotAnim, NULL, PM_HOLD, NULL, 0, false);
     gNisCharOwner[charIndex] = owner;
     nlSNPrintf(gNisOwnName[charIndex], 64, "%s", szName);
-    bool standStill = walking && strstr(likeName, "establish") != NULL;
+    bool standStill = onMark;
     gNisMode[charIndex] = faceoff ? NIS_MOD_FACEOFF : (standStill ? NIS_MOD_SLOT : NIS_MOD_WALK);
     gNisSlotNumber[charIndex] = slotNumber;
     gNisShift[charIndex].x = gNisShift[charIndex].y = gNisShift[charIndex].z = 0.0f;
@@ -250,10 +254,10 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
 
     if (standStill)
     {
-        // Overhead scene: nobody walks, and the sidekick marks are spread out
-        // by design. He stands on the sidekick's mark with his own body.
+        // A reaction on the spot (conceding a goal): he stays on the sidekick's
+        // mark, which is already spread out, and performs his own routine.
         gNisShiftDone[charIndex] = true;
-        OSReport("[mixed teams] intro: character %d (%s) stands on the slot's mark with '%s'\n",
+        OSReport("[mixed teams] intro: character %d (%s) reacts on the slot's mark with '%s'\n",
                  charIndex, charName, szName);
     }
     else if (walking)
@@ -289,6 +293,9 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         gNisShift[charIndex].x = -dx * gap * (float)slotNumber + (-dy) * stagger * side;
         gNisShift[charIndex].y = -dy * gap * (float)slotNumber + (dx) * stagger * side;
         gNisShiftDone[charIndex] = true;
+        // And each follower sets off a beat after the one ahead, which spreads
+        // the line along the path whatever direction the shift ended up in.
+        gNisDelay[charIndex] = GetConfigFloat(cfg, "intro_walk_delay", 0.35f) * (float)slotNumber;
         OSReport("[mixed teams] intro: character %d (%s) walks in with '%s', %.1f m behind the leader, %.1f m to the %s\n",
                  charIndex, charName, szName, gap * (float)slotNumber, stagger, side < 0.0f ? "left" : "right");
     }
@@ -626,7 +633,7 @@ void Nis::Render()
         // MOD (mixed teams): borrowed captains with their own routine.
         if (gNisCharOwner[i] == this && gNisMode[i] != NIS_MOD_NONE)
         {
-            if (gNisDelay[i] > 0.0f)
+            if (gNisDelay[i] > 0.0f && gNisMode[i] == NIS_MOD_FACEOFF)
             {
                 pDC->mVisible = false; // not on yet
                 continue;
