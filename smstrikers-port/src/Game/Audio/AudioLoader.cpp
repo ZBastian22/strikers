@@ -6,6 +6,10 @@
 #include "Game/Audio/SoundEventScript.h"
 #include "Game/BaseGameSceneManager.h"
 #include "Game/Camera/CameraMan.h"
+#include "Game/FE/feHelpFuncs.h"
+#include "Game/CharacterTemplate.h"
+#include "NL/nlConfig.h"
+#include "dolphin/os.h"
 #include "Game/Game.h"
 #include "Game/Sys/PlatStream.h"
 #include "Game/Sys/debug.h"
@@ -1586,6 +1590,14 @@ void AudioLoader::SetupCharStadiumSoundTable()
                     g_pTeams[team]->GetGoalie()->m_pCharacterSFX->SetSFX(gpCRITTERROBOTSoundPropAccessor);
                 }
             }
+            // MOD (mixed teams): a borrowed character speaks with his own voice,
+            // not the voice of whoever the team registered in that slot.
+            else if (GetConfigBool(Config::Global(), "mixed_teams", false)
+                     && GetConfigBool(Config::Global(), "mixed_voices", true)
+                     && pPlayer->m_eCharacterClass != MYSTERY && pPlayer->m_eCharacterClass < NUM_CHARACTER_CLASSES)
+            {
+                pPlayer->m_pCharacterSFX->SetSFX(GetSoundPropTableFromPlayerStadium(stadium, pPlayer->m_eCharacterClass));
+            }
             else if (pPlayer->IsCaptain())
             {
                 if (team == 0)
@@ -1776,6 +1788,76 @@ bool InitializeReverb(eStadiumID, unsigned char);
 /**
  * Offset/Address/Size: 0x1F8 | 0x80143FC4 | size: 0x6EC
  */
+// MOD (mixed teams): the voice bank for any character class (the same table
+// the vanilla code repeats for captains and sidekicks).
+static int MixedSoundGroupFor(eCharacterClass cc)
+{
+    switch (cc)
+    {
+    case MARIO:      return 0x18;
+    case DONKEYKONG: return 0x16;
+    case DAISY:      return 0x15;
+    case LUIGI:      return 0x17;
+    case WALUIGI:    return 0x1a;
+    case PEACH:      return 0x19;
+    case WARIO:      return 0x1b;
+    case YOSHI:      return 0x1c;
+    case HAMMERBROS: return 0x21;
+    case TOAD:       return 0x20;
+    case BIRDO:      return 0x1e;
+    case KOOPA:      return 0x1f;
+    default:         return -1;
+    }
+}
+
+// The characters in the sidekick slots, from the mixed-teams settings.
+static int MixedSlotClasses(eCharacterClass* out, int maxOut)
+{
+    Config& cfg = Config::Global();
+    int n = 0;
+    for (int team = 1; team <= 2 && n < maxOut; ++team)
+    {
+        for (int slot = 2; slot <= 4 && n < maxOut; ++slot)
+        {
+            char szKey[24];
+            nlSNPrintf(szKey, 24, "team%d_slot%d", team, slot);
+            BasicString<char, Detail::TempStringAllocator> name
+                = cfg.Get<BasicString<char, Detail::TempStringAllocator> >(szKey, BasicString<char, Detail::TempStringAllocator>(""));
+            if (name.c_str() == NULL || name.c_str()[0] == 0) continue;
+            eSidekickID sk = ConvertToSidekickID(name.c_str());
+            eTeamID tm = ConvertToTeamID(name.c_str());
+            eCharacterClass cc = (sk != SK_INVALID) ? ConvertToCharacterClass(sk)
+                               : (tm != TEAM_INVALID && tm != TEAM_MYSTERY) ? ConvertToCharacterClass(tm) : NUM_CHARACTER_CLASSES;
+            if (cc < NUM_CHARACTER_CLASSES)
+            {
+                out[n++] = cc;
+            }
+        }
+    }
+    return n;
+}
+
+// Load the voice banks of every borrowed character, so each can speak.
+static void MixedLoadSlotVoices()
+{
+    if (!GetConfigBool(Config::Global(), "mixed_teams", false) || !GetConfigBool(Config::Global(), "mixed_voices", true))
+    {
+        return;
+    }
+    eCharacterClass classes[6];
+    int n = MixedSlotClasses(classes, 6);
+    for (int i = 0; i < n; ++i)
+    {
+        int group = MixedSoundGroupFor(classes[i]);
+        if (group < 0 || AudioLoader::IsSoundGroupLoaded(group, 1))
+        {
+            continue;
+        }
+        bool ok = AudioLoader::gbDisableAudio ? true : (AudioLoader::IsInited() && PlatAudio::LoadSoundGroup(AudioLoader::sebringAudioFileData, group, 1, true));
+        OSReport("[mixed teams] voices: bank %d for %s %s\n", group, GetCharacterName(classes[i]), ok ? "loaded" : "FAILED");
+    }
+}
+
 bool AudioLoader::LoadInGameAudioData()
 {
     bool bAlreadyLoaded;
@@ -2152,6 +2234,8 @@ bool AudioLoader::LoadInGameAudioData()
             }
         }
     }
+
+    MixedLoadSlotVoices(); // MOD (mixed teams): banks for borrowed characters too
 
     return true;
 }
