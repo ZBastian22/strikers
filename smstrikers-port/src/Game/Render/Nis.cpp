@@ -67,6 +67,8 @@ static float gNisWalkGap[10];                    // walk-in: metres behind the l
 static float gNisWalkSide[10];                   // walk-in: metres to the side (+left/-right)
 static float gNisLastDirX[10];                   // walk-in: last known heading
 static float gNisLastDirY[10];
+static bool gNisWalkDelayOnly[10];               // walk-in: space by start time only
+static int gNisWalkLogged[10];                   // diagnostics: how many samples logged
 static Nis* gNisHideOwner[10];                   // borrowed captains hidden in the face-off
 static char gNisOwnName[10][64];                 // the own file's name, for its voice script
 int gNisTriggerVoiceOnly = 0;                    // while set, AddTrigger keeps only character voice
@@ -309,9 +311,23 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
                 delay = GetConfigFloat(cfg, szKey, delay);
             }
         }
+        // intro_walk_spacing: "shift" (distance + delay) or "delay" (start times only).
+        BasicString<char, Detail::TempStringAllocator> spacing
+            = cfg.Get<BasicString<char, Detail::TempStringAllocator> >("intro_walk_spacing", BasicString<char, Detail::TempStringAllocator>("shift"));
+        {
+            const char* sceneType = NisLastType((int)target);
+            if (sceneType != NULL && sceneType[0] != 0)
+            {
+                char szKey[96];
+                nlSNPrintf(szKey, 96, "intro_walk_spacing_%s", sceneType);
+                spacing = cfg.Get<BasicString<char, Detail::TempStringAllocator> >(szKey, spacing);
+            }
+        }
+        gNisWalkDelayOnly[charIndex] = (spacing.c_str() != NULL && nlStrCmp<char>(spacing.c_str(), "delay") == 0);
+        gNisWalkLogged[charIndex] = 0;
         float side = (slotNumber % 2 == 1) ? -1.0f : 1.0f; // 1 left, 2 right, 3 left
-        gNisWalkGap[charIndex] = gap * (float)slotNumber;
-        gNisWalkSide[charIndex] = stagger * side;
+        gNisWalkGap[charIndex] = gNisWalkDelayOnly[charIndex] ? 0.0f : gap * (float)slotNumber;
+        gNisWalkSide[charIndex] = gNisWalkDelayOnly[charIndex] ? 0.0f : stagger * side;
         gNisLastDirX[charIndex] = dx;
         gNisLastDirY[charIndex] = dy;
         gNisShift[charIndex].x = -dx * gNisWalkGap[charIndex] + (-dy) * gNisWalkSide[charIndex];
@@ -726,6 +742,13 @@ void Nis::Render()
                 float dy = gNisLastDirY[i];
                 gNisShift[i].x = -dx * gNisWalkGap[i] + (-dy) * gNisWalkSide[i];
                 gNisShift[i].y = -dy * gNisWalkGap[i] + (dx) * gNisWalkSide[i];
+                if (gNisWalkLogged[i] < 4 && (tNow < 0.05f || (int)(tNow * 2.0f) != (int)((tNow - 0.017f) * 2.0f)))
+                {
+                    ++gNisWalkLogged[i];
+                    OSReport("[mixed teams] walk: '%s' char %d t=%.2f root (%.1f, %.1f, %.1f) moved (%.2f, %.2f) heading (%.2f, %.2f) shift (%.1f, %.1f)%s\n",
+                             mHeader->name, i, tNow, rootTrans.x, rootTrans.y, rootTrans.z, vx, vy, dx, dy,
+                             gNisShift[i].x, gNisShift[i].y, mMirrored ? " mirrored" : "");
+                }
             }
             nlVector3 shift = gNisShift[i];
             if (gNisMode[i] == NIS_MOD_WALK && mMirrored) { shift.x = -shift.x; }
