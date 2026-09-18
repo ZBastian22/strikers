@@ -1,7 +1,7 @@
 // The mod layer.
 //
 // At startup, after strikers.ini and the STRIKERS_* environment variables have
-// been applied, every .lua file in the mods/ folder next to the executable is
+// been applied, every mod in the mods/ folder next to the executable is
 // run, in alphabetical order. A missing or empty folder is fine.
 //
 // Scripts see one global table, `strikers`:
@@ -29,6 +29,7 @@
 #include <windows.h>
 #else
 #include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 extern "C" {
@@ -93,29 +94,114 @@ static int l_on_indicator(lua_State* L)
 #define MODS_MAX_FILES 64
 #define MODS_NAME_MAX 256
 
-static int SortName(const void* a, const void* b)
+// One mod: either a folder mods/<name>/ holding mod.lua (the convention), or a
+// bare mods/<name>.lua (still accepted). A folder may carry a mod.ini next to
+// mod.lua with name=, version=, author= and enabled=0/1 lines.
+struct ModEntry
 {
-    return strcmp((const char*)a, (const char*)b);
+    char folder[MODS_NAME_MAX];  // entry name in mods/ (folder or file)
+    char script[MODS_NAME_MAX];  // "mod.lua" or the bare file name
+    int isFolder;
+    char name[MODS_NAME_MAX];    // display name (from mod.ini, else the folder)
+    char version[64];
+    int enabled;
+};
+
+static int SortMod(const void* a, const void* b)
+{
+    return strcmp(((const ModEntry*)a)->folder, ((const ModEntry*)b)->folder);
 }
 
-static int ListLuaFiles(const char* folder, char names[MODS_MAX_FILES][MODS_NAME_MAX])
+static int FileExists(const char* path)
+{
+    FILE* f = fopen(path, "rb");
+    if (f == NULL) return 0;
+    fclose(f);
+    return 1;
+}
+
+static void TrimLine(char* s)
+{
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' || s[n - 1] == '\t')) s[--n] = 0;
+}
+
+// mod.ini: simple key=value lines, no sections needed.
+static void ReadModIni(const char* dir, ModEntry* m)
+{
+    char path[1400];
+    snprintf(path, sizeof path, "%s/mod.ini", dir);
+    FILE* f = fopen(path, "rb");
+    if (f == NULL) return;
+    char line[512];
+    while (fgets(line, sizeof line, f) != NULL)
+    {
+        TrimLine(line);
+        char* eq = strchr(line, '=');
+        if (eq == NULL || line[0] == ';' || line[0] == '#') continue;
+        *eq = 0;
+        char* key = line;
+        char* val = eq + 1;
+        while (*val == ' ' || *val == '\t') ++val;
+        TrimLine(key);
+        if (strcmp(key, "name") == 0) snprintf(m->name, sizeof m->name, "%s", val);
+        else if (strcmp(key, "version") == 0) snprintf(m->version, sizeof m->version, "%s", val);
+        else if (strcmp(key, "enabled") == 0) m->enabled = (val[0] != '0' && strcmp(val, "false") != 0 && strcmp(val, "no") != 0);
+    }
+    fclose(f);
+}
+
+static void AddEntry(ModEntry* mods, int* count, const char* folder, const char* entry, int isDir)
+{
+    if (*count >= MODS_MAX_FILES || entry[0] == '.') return;
+    ModEntry* m = &mods[*count];
+    memset(m, 0, sizeof *m);
+    snprintf(m->folder, sizeof m->folder, "%s", entry);
+    snprintf(m->name, sizeof m->name, "%s", entry);
+    m->enabled = 1;
+    if (isDir)
+    {
+        char dir[1400];
+        snprintf(dir, sizeof dir, "%s/%s", folder, entry);
+        static const char* const kEntry[] = { "mod.lua", "main.lua", "init.lua" };
+        int found = 0;
+        for (int k = 0; k < 3 && !found; ++k)
+        {
+            char path[1600];
+            snprintf(path, sizeof path, "%s/%s", dir, kEntry[k]);
+            if (FileExists(path))
+            {
+                snprintf(m->script, sizeof m->script, "%s", kEntry[k]);
+                found = 1;
+            }
+        }
+        if (!found) return; // a folder with no script is not a mod
+        m->isFolder = 1;
+        ReadModIni(dir, m);
+    }
+    else
+    {
+        size_t len = strlen(entry);
+        if (len <= 4 || strcmp(entry + len - 4, ".lua") != 0) return;
+        snprintf(m->script, sizeof m->script, "%s", entry);
+    }
+    ++*count;
+}
+
+static int ListMods(const char* folder, ModEntry* mods)
 {
     int count = 0;
 
 #ifdef _WIN32
     char pattern[1200];
-    snprintf(pattern, sizeof pattern, "%s\\*.lua", folder);
+    snprintf(pattern, sizeof pattern, "%s\\*", folder);
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern, &fd);
     if (h != INVALID_HANDLE_VALUE)
     {
         do
         {
-            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && count < MODS_MAX_FILES)
-            {
-                snprintf(names[count], MODS_NAME_MAX, "%s", fd.cFileName);
-                ++count;
-            }
+            AddEntry(mods, &count, folder, fd.cFileName, (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
@@ -124,20 +210,19 @@ static int ListLuaFiles(const char* folder, char names[MODS_MAX_FILES][MODS_NAME
     if (d != NULL)
     {
         struct dirent* e;
-        while ((e = readdir(d)) != NULL && count < MODS_MAX_FILES)
+        while ((e = readdir(d)) != NULL)
         {
-            size_t len = strlen(e->d_name);
-            if (len > 4 && strcmp(e->d_name + len - 4, ".lua") == 0)
-            {
-                snprintf(names[count], MODS_NAME_MAX, "%s", e->d_name);
-                ++count;
-            }
+            char path[1400];
+            snprintf(path, sizeof path, "%s/%s", folder, e->d_name);
+            struct stat st;
+            int isDir = (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+            AddEntry(mods, &count, folder, e->d_name, isDir);
         }
         closedir(d);
     }
 #endif
 
-    qsort(names, (size_t)count, MODS_NAME_MAX, SortName);
+    qsort(mods, (size_t)count, sizeof(ModEntry), SortMod);
     return count;
 }
 
@@ -157,11 +242,11 @@ extern "C" void PortModsInit(void)
     char folder[1100];
     snprintf(folder, sizeof folder, "%s/mods", dir);
 
-    static char names[MODS_MAX_FILES][MODS_NAME_MAX];
-    int count = ListLuaFiles(folder, names);
+    static ModEntry mods[MODS_MAX_FILES];
+    int count = ListMods(folder, mods);
     if (count == 0)
     {
-        OSReport("[mods] no scripts in %s\n", folder);
+        OSReport("[mods] no mods in %s\n", folder);
         return;
     }
 
@@ -184,18 +269,49 @@ extern "C" void PortModsInit(void)
     lua_setfield(gL, -2, "api_version");
     lua_setglobal(gL, "strikers");
 
+    int loaded = 0;
     for (int i = 0; i < count; ++i)
     {
-        char full[1400];
-        snprintf(full, sizeof full, "%s/%s", folder, names[i]);
-        OSReport("[mods] running %s\n", names[i]);
+        ModEntry* m = &mods[i];
+        if (!m->enabled)
+        {
+            OSReport("[mods] %s is disabled (mod.ini)\n", m->name);
+            continue;
+        }
+        char modDir[1400];
+        char full[1700];
+        if (m->isFolder)
+        {
+            snprintf(modDir, sizeof modDir, "%s/%s", folder, m->folder);
+            snprintf(full, sizeof full, "%s/%s", modDir, m->script);
+        }
+        else
+        {
+            snprintf(modDir, sizeof modDir, "%s", folder);
+            snprintf(full, sizeof full, "%s/%s", folder, m->script);
+        }
+
+        // strikers.mod_dir / strikers.mod_name tell a script where it lives.
+        lua_getglobal(gL, "strikers");
+        lua_pushstring(gL, modDir);
+        lua_setfield(gL, -2, "mod_dir");
+        lua_pushstring(gL, m->name);
+        lua_setfield(gL, -2, "mod_name");
+        lua_pop(gL, 1);
+
+        if (m->version[0] != 0)
+            OSReport("[mods] loading %s %s (%s)\n", m->name, m->version, m->folder);
+        else
+            OSReport("[mods] loading %s (%s)\n", m->name, m->folder);
         if (luaL_dofile(gL, full) != LUA_OK)
         {
-            OSReport("[mods] ERROR in %s: %s\n", names[i], lua_tostring(gL, -1));
+            OSReport("[mods] ERROR in %s: %s\n", m->name, lua_tostring(gL, -1));
             lua_pop(gL, 1);
+            continue;
         }
+        ++loaded;
     }
-    OSReport("[mods] %d script(s) loaded\n", count);
+    OSReport("[mods] %d mod(s) loaded\n", loaded);
 }
 
 // --------------------------------------------------------------------------
