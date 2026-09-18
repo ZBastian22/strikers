@@ -69,6 +69,7 @@ static float gNisLastDirX[10];                   // walk-in: last known heading
 static float gNisLastDirY[10];
 static bool gNisWalkDelayOnly[10];               // walk-in: space by start time only
 static int gNisWalkLogged[10];                   // diagnostics: how many samples logged
+static float gNisWalkLoggedT[10];                // diagnostics: controller time of the last sample
 static Nis* gNisHideOwner[10];                   // borrowed captains hidden in the face-off
 static char gNisOwnName[10][64];                 // the own file's name, for its voice script
 int gNisTriggerVoiceOnly = 0;                    // while set, AddTrigger keeps only character voice
@@ -325,6 +326,7 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
         }
         gNisWalkDelayOnly[charIndex] = (spacing.c_str() != NULL && nlStrCmp<char>(spacing.c_str(), "delay") == 0);
         gNisWalkLogged[charIndex] = 0;
+        gNisWalkLoggedT[charIndex] = -1.0f;
         float side = (slotNumber % 2 == 1) ? -1.0f : 1.0f; // 1 left, 2 right, 3 left
         gNisWalkGap[charIndex] = gNisWalkDelayOnly[charIndex] ? 0.0f : gap * (float)slotNumber;
         gNisWalkSide[charIndex] = gNisWalkDelayOnly[charIndex] ? 0.0f : stagger * side;
@@ -742,9 +744,10 @@ void Nis::Render()
                 float dy = gNisLastDirY[i];
                 gNisShift[i].x = -dx * gNisWalkGap[i] + (-dy) * gNisWalkSide[i];
                 gNisShift[i].y = -dy * gNisWalkGap[i] + (dx) * gNisWalkSide[i];
-                if (gNisWalkLogged[i] < 4 && (tNow < 0.05f || (int)(tNow * 2.0f) != (int)((tNow - 0.017f) * 2.0f)))
+                if (gNisWalkLogged[i] < 5 && tNow >= gNisWalkLoggedT[i] + 1.0f)
                 {
                     ++gNisWalkLogged[i];
+                    gNisWalkLoggedT[i] = tNow;
                     OSReport("[mixed teams] walk: '%s' char %d t=%.2f root (%.1f, %.1f, %.1f) moved (%.2f, %.2f) heading (%.2f, %.2f) shift (%.1f, %.1f)%s\n",
                              mHeader->name, i, tNow, rootTrans.x, rootTrans.y, rootTrans.z, vx, vy, dx, dy,
                              gNisShift[i].x, gNisShift[i].y, mMirrored ? " mirrored" : "");
