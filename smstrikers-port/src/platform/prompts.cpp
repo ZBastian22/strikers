@@ -17,6 +17,7 @@ extern "C" int PortPromptsSetFamily(const char*) { return 0; }
 #include "port/input.h"
 #include "port/overlay.h"
 #include "port/steamdeck.h"
+#include "port/texture_packs.h"
 #include "prompt_art.h"
 
 #include "NL/nlFont.h"
@@ -111,6 +112,13 @@ bool deckPad(int port)
     return SDL_GetGamepadProduct(pad) == kSteamVirtualProduct && PortIsSteamDeck() != 0;
 }
 
+// Held sideways, a single Joy-Con's face buttons do not carry the letters SDL gives them.
+bool loneJoyCon(int port)
+{
+    const PADControllerType type = PADGetControllerType(port);
+    return type == PAD_TYPE_JOYCON_LEFT || type == PAD_TYPE_JOYCON_RIGHT;
+}
+
 Family padFamily(int port)
 {
     if (deckPad(port))
@@ -197,6 +205,10 @@ void initialize()
     selectDefault();
 
     std::vector<std::string> candidates;
+#if defined(__SWITCH__)
+    // Packed into the .nro's romfs.
+    candidates.push_back("romfs:/input-prompts");
+#endif
     char dir[1024];
     if (port_executable_dir(dir, sizeof dir) == 0)
     {
@@ -353,6 +365,7 @@ void textureHeader(unsigned char* blob)
 
 void paintLegends()
 {
+    PortTextureDumpSkip(1);
     for (int c = 0; c < kLegendCount; ++c)
     {
         if (!s_loaded[c])
@@ -378,6 +391,7 @@ void paintLegends()
             be16(blob + 1056 + i * 2, palette[i]);
         glTextureReplace(kLegends[c], blob, sizeof blob);
     }
+    PortTextureDumpSkip(0);
 }
 
 void update()
@@ -472,8 +486,9 @@ void update()
             if (family == Generic)
                 in.labels[i] = Unknown;
             else if (in.connected && (forced == Auto || padFamily(port) == family))
-                in.labels[i] =
-                    labelFor(SDL_GetGamepadButtonLabel(pad, static_cast<SDL_GamepadButton>(i)));
+                in.labels[i] = loneJoyCon(port) ? Unknown
+                                                : labelFor(SDL_GetGamepadButtonLabel(
+                                                      pad, static_cast<SDL_GamepadButton>(i)));
             else if (family != Gamecube && family != Generic)
                 in.labels[i] = labelFor(SDL_GetGamepadButtonLabelForType(
                     sdlType(family), static_cast<SDL_GamepadButton>(i)));

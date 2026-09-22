@@ -14,11 +14,13 @@
 #include "port/framerate.h"
 #include "port/host.h"   // port_monotonic_ns
 #if defined(PORT_USE_AURORA)
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_video.h>
 #endif
 #include "port/overlay.h"
 extern "C" void PortDebugFrame(void);   // PORT: defined in Game.cpp
 #include "port/launch.h"
+#include "port/discord.h"
 #include "port/shaders.h"   // PORT: the shader stage, held on the memory card screen
 #include <aurora/main.h>   // #define main aurora_main
 #include <aurora/event.h>
@@ -28,6 +30,7 @@ extern "C" void PortDebugFrame(void);   // PORT: defined in Game.cpp
 #include "port/audio.h"
 #include "port/determinism.h"
 #include "port/config.h"
+#include "port/texture_packs.h"
 #include "Game/Audio/AudioStream.h"
 #include "Game/Sys/audio.h"
 #include "Game/Sys/clock.h"
@@ -45,6 +48,7 @@ extern "C" void PortDebugFrame(void);   // PORT: defined in Game.cpp
 #include "NL/nlLocalization.h"
 #include "NL/nlString.h"
 #include "NL/platpad.h"
+#include "Game/Game.h"
 #include "Game/ProfileTask.h"
 #include "Game/Sys/FloatingPointExceptions.h"
 #include "Game/Sys/CallStackDumper.h"
@@ -834,8 +838,12 @@ int main(int argc, char* argv[])
         VILockAspectRatio((int)(PortTargetAspect() * 10000.0f), 10000);
         AuroraSetViewportPolicy(AURORA_VIEWPORT_FIT);
 
+        PortTexturesInit(info.userPath); // PORT: texture packs
+
         // Aurora's PAD reads SDL gamepads and reports PAD_ERR_NO_CONTROLLER when there is neither a gamepad nor a keyboard binding.
         PortInstallKeyboardBindings();
+
+        PortDiscordInit();
     }
 #else
     (void)argc;
@@ -874,16 +882,33 @@ int main(int argc, char* argv[])
         PortPumpAuroraEvents();
         PortUpdateSyntheticInput(s_portFrame);
         PortDebugFrame();
+        // PORT: ReturnToFE leaves the pause flag set, so it is a pause only while a match exists.
+        PortDiscordUpdate(FrontEnd::m_bInPauseMenuState && g_pGame != NULL ? 1 : 0);
 
         // PORT: timed, since the swapchain acquire blocks inside aurora_begin_frame under vsync.
         const unsigned long long acquireStart = port_monotonic_ns();
         if (!aurora_begin_frame())
             continue;              // minimised or surface lost; nothing to draw
         const unsigned long long acquireNs = port_monotonic_ns() - acquireStart;
-
-        PortPromptsFrame(); // PORT: button prompts
         PortBenchFrameBegin();
         PortBenchAddAcquire(acquireNs);
+
+        // PORT: SDL's pad state only changes in a pump and the acquire blocks under vsync, so pump again after it.
+        {
+            static int s_latePump = -1;
+            if (s_latePump < 0)
+            {
+                const char* e = getenv("STRIKERS_LATE_PUMP");
+                s_latePump = (e != NULL && *e == '0') ? 0 : 1;
+            }
+            if (s_latePump)
+            {
+                PortBenchInputPumped();
+                SDL_PumpEvents();
+            }
+        }
+
+        PortPromptsFrame(); // PORT: button prompts
 
         // Sample the pad before the tasks that read it. main() registers VBlankPadUpdate through PADSetSamplingCallback.
         PortInvokePadSamplingCallback();
@@ -935,6 +960,7 @@ int main(int argc, char* argv[])
                 s_portRunning = false;
         }
     }
+    PortDiscordShutdown();
     PortBenchReport();
     aurora_shutdown();
     return 0;

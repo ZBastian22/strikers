@@ -72,6 +72,7 @@ wgpu::AdapterInfo g_adapterInfo;
 static wgpu::SurfaceCapabilities g_surfaceCapabilities;
 bool g_hasCoreFeatures = false;
 bool g_bcTexturesSupported = false;
+bool g_cmprAsBc1 = false;
 bool g_astcTexturesSupported = false;
 bool g_textureComponentSwizzleSupported = false;
 static std::atomic_bool g_initialized = false;
@@ -957,6 +958,14 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
         }
       }
     }
+#ifdef __SWITCH__
+    // smstrikers-port: BC1 is 4 bits a pixel to decoded CMPR's 32 but blends in thirds where GX uses eighths.
+    {
+      const char* e = std::getenv("STRIKERS_CMPR_BC1");
+      g_cmprAsBc1 = g_bcTexturesSupported && (e == nullptr || *e != '0');
+    }
+#endif
+
     std::string featureList;
     for (auto featureName : requiredFeatures) {
       featureList += "\n  ";
@@ -1185,6 +1194,19 @@ bool refresh_surface(bool recreate) {
 void resize_swapchain(uint32_t width, uint32_t height, uint32_t nativeWidth, uint32_t nativeHeight, bool force) {
   gfx::gpu_synchronize();
   resize_swapchain_internal(width, height, nativeWidth, nativeHeight, force);
+}
+
+bool pop_out_of_memory_scope() noexcept {
+  bool outOfMemory = false;
+  const wgpu::Future future = g_device.PopErrorScope(
+      wgpu::CallbackMode::WaitAnyOnly, [&outOfMemory](wgpu::PopErrorScopeStatus status, wgpu::ErrorType type,
+                                                      wgpu::StringView) {
+        outOfMemory = status == wgpu::PopErrorScopeStatus::Success && type == wgpu::ErrorType::OutOfMemory;
+      });
+  wgpu::FutureWaitInfo wait{};
+  wait.future = future;
+  g_instance.WaitAny(1, &wait, UINT64_MAX);
+  return outOfMemory;
 }
 } // namespace aurora::webgpu
 

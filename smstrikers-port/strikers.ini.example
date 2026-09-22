@@ -109,8 +109,8 @@
 # pad_dpad_left = dpleft
 # pad_dpad_right = dpright
 # pad_swap_sticks = 0     ; 1 swaps the main stick and the C-stick
-# pad_deadzone = 0.15     ; 0.0 .. 0.9, fraction of stick radius
-# pad_trigger_threshold = 0.5
+# pad_deadzone = 0.24     ; 0.0 .. 0.9, fraction of stick radius
+# pad_trigger_threshold = 0.95
 # pad_rumble = 1          ; 0 turns rumble off on every port
 # pad_rumble_strength = 100   ; 0..100
 
@@ -127,6 +127,21 @@
 # Unset keeps the disc's own language. The American disc ignores this.
 # language = german
 
+# Texture packs load from mods/textures/ beside the game and mods/textures/ in the user folder. A
+# folder named here loads too and wins over both; 0 turns texture packs off.
+# textures = C:/games/strikers/packs/hd pitch
+
+# One pack out of the textures folders, by its folder name. Unset loads every pack.
+# texture_pack = hd pitch
+
+# Memory for loaded texture pack images, in MB. Past it the least recently drawn is dropped and
+# loaded again when next needed. 4096 by default, 512 on Switch.
+# texture_cache_mb = 1024
+
+# Save each texture the game loads as a PNG named for a texture pack, in a folder per disc file.
+# 1 saves to texture_dumps/ in the user folder; a path saves there.
+# texture_dump = 1
+
 [game]
 # Which disc the data came from, when the data cannot say: the id is read from sys/boot.bin
 # beside `files` or from an image's first bytes, and an extraction of `files` alone is taken
@@ -135,6 +150,11 @@
 
 # Every stadium, team and cup mode available.
 # unlock_all = 1
+
+[discord]
+# Your Discord status while the game runs: in the menus, or a match's mode, cup round, stadium,
+# captains, score and time left. Off by default; 1 turns it on while Discord's desktop app runs.
+# discord = 1
 
 [debug]
 # The debug overlay and menu. `menu` opens the menu straight away, `1` draws only the compact

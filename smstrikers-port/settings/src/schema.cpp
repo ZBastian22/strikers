@@ -196,6 +196,28 @@ QVector<Setting> makeGame()
         QStringLiteral(
         "Where the game data is: either the `files` folder of an extracted disc, or a disc image.")));
 
+    // Unset or a folder means on and 0 means off; the switch keeps a folder the file names.
+    v.push_back(toggle("textures", "paths", Text::tr("Packs"), "",
+        Text::tr("Use texture packs"),
+        Text::tr("Replacement textures, including packs made for Dolphin."),
+        QStringLiteral(
+        "Texture packs load from mods/textures/ beside the game and mods/textures/ in the user folder. A folder named "
+        "here loads too and wins over both; 0 turns texture packs off.")));
+
+    v.push_back(scalar("texture_pack", "paths", Text::tr("Pack"), "",
+        Text::tr("Loads one pack when the textures folders hold several."),
+        QStringLiteral(
+        "One pack out of the textures folders, by its folder name. Unset loads every pack.")));
+
+    v.push_back(toggle("texture_dump", "paths", Text::tr("Pack making"), "0",
+        Text::tr("Save the game's textures as it loads them"),
+        Text::tr(
+        "Saves each texture as a picture. An edited copy that keeps its file "
+        "name and proportions replaces the original when put in a pack."),
+        QStringLiteral(
+        "Save each texture the game loads as a PNG named for a texture pack, in a folder per disc file. "
+        "1 saves to texture_dumps/ in the user folder; a path saves there.")));
+
     // This is the *game's* language, OSGetLanguage(), the setting a European GameCube kept in SRAM;
     // and it has nothing to do with the language this window is written in.
     v.push_back(choice("language", "paths", Text::tr("Language"), "",
@@ -220,6 +242,15 @@ QVector<Setting> makeGame()
         "them first."),
         QStringLiteral(
         "Every stadium, team and cup mode available.")));
+
+    v.push_back(toggle("discord", "discord", Text::tr("Discord (Rich Presence)"), "0",
+        Text::tr("Show what you're playing on Discord"),
+        Text::tr(
+        "Your Discord profile shows the mode, the captains and the score "
+        "while you play. Discord has to be open on this computer."),
+        QStringLiteral(
+        "Your Discord status while the game runs: in the menus, or a match's mode, cup round, stadium, "
+        "captains, score and time left. Off by default; 1 turns it on while Discord's desktop app runs.")));
 
     // The default is off and the on value is `menu`, not `1`, because `1` is the compact heads-up
     // form and a player who turns "debug mode" on and sees a frame counter has not been given the
@@ -268,7 +299,8 @@ QVector<Setting> makeInputSwitches()
         "1 swaps the left and right sticks, so the right stick moves the player and\n"
         "the left one aims. The GameCube's own layout is the other way round.")));
 
-    v.push_back(scalar("pad_deadzone", "input", Text::tr("Stick deadzone"), "0.15",
+    // What the game uses unset (Aurora's 8000 and 31150 of 32767), since a default is saved commented out.
+    v.push_back(scalar("pad_deadzone", "input", Text::tr("Stick deadzone"), "0.24",
         Text::tr(
         "How far a stick must travel before input registers. Raise it if a "
         "worn stick drifts at rest."),
@@ -276,7 +308,7 @@ QVector<Setting> makeInputSwitches()
         "How far a stick has to move before the game sees it, as a fraction of full\n"
         "travel. Raise it on a worn pad that drifts; lower it for finer control.")));
 
-    v.push_back(scalar("pad_trigger_threshold", "input", Text::tr("Trigger point"), "0.5",
+    v.push_back(scalar("pad_trigger_threshold", "input", Text::tr("Trigger point"), "0.95",
         Text::tr(
         "How far a trigger must travel to register as a press."),
         QStringLiteral(

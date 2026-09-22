@@ -301,6 +301,7 @@ struct Job {
 
 struct Parked {
   ByteBuffer data;
+  wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
   bool hasArbitraryMips = false;
   Clock::time_point parkedAt;
   std::list<TextureContentKey>::iterator lru;
@@ -308,6 +309,7 @@ struct Parked {
 
 struct Taken {
   ByteBuffer data;
+  wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
   bool hasArbitraryMips = false;
 };
 
@@ -437,6 +439,7 @@ void worker(std::stop_token) {
     st.parkedBytes += converted.data.size();
     st.parked.emplace(key, Parked{
                                .data = std::move(converted.data),
+                               .format = converted.format,
                                .hasArbitraryMips = converted.hasArbitraryMips,
                                .parkedAt = Clock::now(),
                                .lru = st.parkedLru.begin(),
@@ -454,7 +457,9 @@ std::optional<Taken> take(const TextureContentKey& key) noexcept {
   if (it == st.parked.end()) {
     return std::nullopt;
   }
-  Taken taken{.data = std::move(it->second.data), .hasArbitraryMips = it->second.hasArbitraryMips};
+  Taken taken{.data = std::move(it->second.data),
+              .format = it->second.format,
+              .hasArbitraryMips = it->second.hasArbitraryMips};
   st.parkedBytes -= taken.data.size();
   st.parkedLru.erase(it->second.lru);
   st.parked.erase(it);
@@ -887,6 +892,22 @@ void invalidate_replacement(uint64_t replacementId) noexcept {
   }
 }
 
+uint64_t replacement_last_used_frame(uint64_t replacementId) noexcept {
+  const auto users = s_replacementUsers.find(replacementId);
+  if (users == s_replacementUsers.end()) {
+    return 0;
+  }
+  uint64_t last = 0;
+  for (const u32 texObjId : users->second) {
+    if (const auto it = s_textureObjectCaches.find(texObjId); it != s_textureObjectCaches.end()) {
+      last = std::max(last, it->second.lastUsedFrame);
+    }
+  }
+  return last;
+}
+
+uint64_t current_frame() noexcept { return s_frameCount; }
+
 gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
   ZoneScoped;
 
@@ -926,6 +947,7 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
       const size_t sourceBytes = texture_source_size(obj.format(), obj.width(), obj.height(), obj.mip_count());
       if (auto preconverted = pre::enabled() ? pre::take(keys->contentKey) : std::nullopt) {
         handle = gfx::new_static_texture_2d_converted(obj.width(), obj.height(), obj.mip_count(), obj.format(),
+                                                      preconverted->format,
                                                       {preconverted->data.data(), preconverted->data.size()},
                                                       preconverted->hasArbitraryMips, nameStr);
       } else {
