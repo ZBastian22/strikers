@@ -142,6 +142,35 @@ public:
         void Fire(Nis& nis) const;
     }; // total size: 0x24
 
+    // MOD (mixed teams): a borrowed captain standing in a sidekick slot performs his
+    // own intro routine, which needs somewhere to keep his own file, his placement
+    // and his timing. One set PER CUTSCENE, deliberately: these were file-static
+    // arrays shared by every Nis, and because NisPlayer builds the *next* cutscene's
+    // Nis from the async-load completion while the current one is still on screen,
+    // the new Nis wiped the state the playing one was still drawing with -- and freed
+    // the animation buffer out from under it. The first home entrance shot lost its
+    // spacing mid-scene and drew every borrowed captain on his own file's raw mark,
+    // which for a captain's own clip is nearly the same spot for all of them.
+    struct ModIntro
+    {
+        char* charBuffer;                // the captain's own file, while in use
+        cPN_SAnimController* slotCtrl;   // the slot's animation, kept for measuring
+        int mode;                        // NIS_MOD_NONE / _WALK / _FACEOFF / _SLOT
+        int slotNumber;                  // 1..3 within the team
+        nlVector3 shift;                 // added to the root, after mirroring
+        bool shiftDone;
+        bool hide;                       // hidden for the face-off
+        float delay;                     // seconds before the own routine starts
+        float walkGap;                   // walk-in: metres behind the leader
+        float walkSide;                  // walk-in: metres to the side (+left/-right)
+        float lastDirX;                  // walk-in: last known heading
+        float lastDirY;
+        bool walkDelayOnly;              // walk-in: space by start time only
+        int walkLogged;                  // diagnostics: how many samples logged
+        float walkLoggedT;               // diagnostics: controller time of the last sample
+        char ownName[64];                // the own file's name, for its voice script
+    };
+
     Nis(NisHeader& header, char* data, int size);
     ~Nis();
     char* Name() const;
@@ -173,6 +202,10 @@ public:
     /* 0x734 */ int mMainCharacterIndex;                                        // offset 0x734, size 0x4
     /* 0x738 */ int mAudioCharacterIndex;                                       // offset 0x738, size 0x4
     /* 0x73C */ NisAudioData* mNisAudioDataList;                                // offset 0x73C, size 0x4
-}; // total size: 0x740
+    // MOD (mixed teams): past the original struct. Nis is only ever built by
+    // placement new over nlMalloc(sizeof(Nis)) (NisPlayer.cpp:574) and is never
+    // cast from disc data, so growing it past 0x740 is safe.
+    /* 0x740 */ ModIntro mMod[MAX_NUM_CHARACTERS];
+}; // total size: 0x740 on the GameCube, larger here (see mMod)
 
 #endif // _NIS_H_
