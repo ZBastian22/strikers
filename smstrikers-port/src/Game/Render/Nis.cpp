@@ -340,6 +340,276 @@ static cSAnim* NisOwnIntroAnim(Nis* owner, int charIndex, NisTarget target, cons
     return own;
 }
 
+// MOD (mixed teams): the animation the ARTISTS authored for this slot in this
+// stadium. A borrowed captain's own controller now holds his own file, and the
+// slot's animation was kept aside as slotCtrl (Nis.cpp:239). For anybody else
+// -- an ordinary Toad, the Super Team -- nothing replaced it, so the controller
+// still holds the slot animation itself (Nis.cpp:719-721).
+static cSAnim* NisSlotAnimOf(Nis* nis, int charIndex)
+{
+    Nis::ModIntro& st = nis->mMod[charIndex];
+    if (st.slotCtrl != NULL && st.slotCtrl->m_pSAnim != NULL)
+    {
+        return st.slotCtrl->m_pSAnim;
+    }
+    if (nis->mCharacterControllers[charIndex] != NULL)
+    {
+        return nis->mCharacterControllers[charIndex]->m_pSAnim;
+    }
+    return NULL;
+}
+
+// MOD (mixed teams): put the whole sidekick group into single file, on the
+// ground the artists drew for THIS stadium.
+//
+// Every number below comes out of the slot animations this cutscene just
+// loaded -- the same root tracks the unmodded game walks its sidekicks along.
+// There is no world-space constant here and no assumption about the layout.
+// The line runs along those tracks' own heading, its front man stays exactly
+// on the frontmost authored mark, and its depth is the depth the artists
+// themselves used, so with intro_line_min_gap at 0 nobody is ever placed on
+// ground no authored mark occupies. Clamping the gap DOWN (max_gap) only makes
+// the line shorter, which stays inside the footprint; clamping it UP (min_gap)
+// is the one thing that can reach past the rearmost mark, and by how much is
+// printed in the log every time.
+//
+// Runs as the LAST statement of the constructor on purpose: only then has every
+// animation been handed out, so it is known which slots hold borrowed captains
+// and which hold ordinary sidekicks.
+static void NisLineUpSlots(Nis* nis)
+{
+    Config& cfg = Config::Global();
+    if (!GetConfigBool(cfg, "mixed_teams", false)) return;
+    if (!GetConfigBool(cfg, "intro_own_anims", true)) return;
+    if (!GetConfigBool(cfg, "intro_line", true)) return;
+    if (nis->mTarget != NIS_TARGET_HOME_SIDEKICK && nis->mTarget != NIS_TARGET_AWAY_SIDEKICK)
+    {
+        return;
+    }
+
+    // Only when a borrowed captain is actually walking in. With none, the
+    // artists' own formation is left exactly alone -- which is also what keeps
+    // stock play bit-identical: nothing has set NIS_MOD_WALK before this loop
+    // runs except NisOwnIntroAnim, which returns NULL with the mod off
+    // (Nis.cpp:140-143). This pass sets it too, further down, but only after
+    // this check has passed. Note it is THIS check, not the mTarget gate above,
+    // that keeps the pass off the face-off: 'attitude' also runs with
+    // NIS_TARGET_AWAY_SIDEKICK.
+    bool borrowed = false;
+    for (int i = 0; i < 10; i++)
+    {
+        if (nis->mMod[i].mode == NIS_MOD_WALK) { borrowed = true; break; }
+    }
+    if (!borrowed) return;
+
+    // Slot order is the animation order in the file: mBallId[i] is the animation
+    // index this character was given (Nis.cpp:719), -1 for none (Nis.cpp:632).
+    int      chr[4];
+    cSAnim*  anm[4];
+    int      seen[4];
+    int      count = 0;
+    for (int a = 0; a < 4; a++) { seen[a] = -1; }
+    for (int i = 0; i < 10; i++)
+    {
+        if (nis->mCharacterControllers[i] == NULL) continue;
+        Nis::ModIntro& st = nis->mMod[i];
+        if (st.hide) continue;
+        if (st.mode == NIS_MOD_FACEOFF || st.mode == NIS_MOD_SLOT) continue; // not a walk-in
+        int a = nis->mBallId[i];
+        if (a < 0 || a >= 4) continue;
+        if (seen[a] >= 0) continue;
+        cSAnim* sa = NisSlotAnimOf(nis, i);
+        // A slot whose authored track carries no root keys cannot say where the
+        // walkway is (GetRootTrans would hand back the world origin,
+        // SAnim.cpp:465-467). Leave that character exactly where he is today.
+        if (sa == NULL || sa->m_nNumRootKeys == 0) continue;
+        seen[a] = i;
+        chr[count] = i;
+        anm[count] = sa;
+        count++;
+    }
+    if (count < 2) return;
+
+    // The walkway's direction, straight out of the first slot's authored track.
+    // 0.0f and 1.0f are FRACTIONS: GetRootTrans takes t in 0..1 (SAnim.cpp:448)
+    // and 1.0f takes the exact-last-key branch at SAnim.cpp:452, so neither
+    // sample can read past the end -- unlike the GetDuration() calls at
+    // Nis.cpp:264 and :275, which are a separate defect this patch leaves alone.
+    cSAnim* lead = anm[0];
+    nlVector3 p0 = { 0.0f, 0.0f, 0.0f };
+    nlVector3 p1 = { 0.0f, 0.0f, 0.0f };
+    lead->GetRootTrans(0.0f, &p0);
+    lead->GetRootTrans(1.0f, &p1);
+    float hx = p1.x - p0.x;
+    float hy = p1.y - p0.y;
+    float travel = sqrtf(hx * hx + hy * hy);
+    if (travel > 0.25f)
+    {
+        hx /= travel; hy /= travel;
+    }
+    else
+    {
+        // The track barely travels: use the way the artists point him at the
+        // start instead.
+        u16 face = 0;
+        lead->GetRootRot(0.0f, &face);
+        float rad = 0.0000958738f * (float)face;   // 2*pi/65536, as at Nis.cpp:276
+        hx = cosf(rad); hy = sinf(rad);
+    }
+    float px = -hy;   // across the walkway
+    float py =  hx;
+
+    // Each slot's authored mark, split into "how far down the walkway" and
+    // "how far across it".
+    float sAlong[4];
+    float sAcross[4];
+    for (int k = 0; k < count; k++)
+    {
+        nlVector3 m = { 0.0f, 0.0f, 0.0f };
+        anm[k]->GetRootTrans(0.0f, &m);
+        sAlong[k]  = m.x * hx + m.y * hy;
+        sAcross[k] = m.x * px + m.y * py;
+    }
+
+    // Rank by how far each man ACTUALLY travels in the clip he is DRAWN with,
+    // fastest at the front -- NOT by his authored start mark. Everyone is
+    // spaced once, at load, and then runs on his own clip in lockstep
+    // (m_fTime is a 0..1 fraction of that clip), so the only thing that can
+    // make two of them meet is a slower man standing in front of a faster one.
+    // A plain sidekick with no own file keeps the SLOT clip, which travels
+    // 1.03-1.12 m in the toad walk-ins, while a borrowed captain plays his own,
+    // which travels 2.25-2.38 m on the establish shot. In
+    // toad_establish_stadium_home_0.nis the frontmost authored mark belongs to
+    // animation 2, and animation 2 is the plain sidekick -- ranking on the
+    // marks puts the 1.03 m man at the head of a file of 2.25 m men, and they
+    // reach the same point three quarters of the way into a one-second shot.
+    // A root that does not move at all is a character whose travel is authored
+    // in his node hierarchy (Donkey Kong): he covers a captain's distance, so
+    // he leads rather than trails.
+    float sSpeed[4];
+    for (int k = 0; k < count; k++)
+    {
+        cPN_SAnimController* pc = nis->mCharacterControllers[chr[k]];
+        cSAnim* play = (pc != NULL) ? pc->m_pSAnim : NULL;
+        sSpeed[k] = 0.0f;
+        if (play != NULL && play->m_nNumRootKeys != 0)
+        {
+            nlVector3 c0 = { 0.0f, 0.0f, 0.0f };
+            nlVector3 c1 = { 0.0f, 0.0f, 0.0f };
+            play->GetRootTrans(0.0f, &c0);
+            play->GetRootTrans(1.0f, &c1);
+            float ex = c1.x - c0.x;
+            float ey = c1.y - c0.y;
+            sSpeed[k] = ex * hx + ey * hy;
+            // A genuinely static root, not a clip that walks backwards.
+            if (ex * ex + ey * ey < 0.0025f) { sSpeed[k] = 1.0e9f; }
+        }
+        else
+        {
+            sSpeed[k] = 1.0e9f;
+        }
+    }
+    int rank[4];
+    for (int k = 0; k < count; k++) { rank[k] = k; }
+    for (int k = 1; k < count; k++)
+    {
+        int v = rank[k];
+        int j = k - 1;
+        while (j >= 0 && sSpeed[rank[j]] < sSpeed[v]) { rank[j + 1] = rank[j]; --j; }
+        rank[j + 1] = v;
+    }
+    // The footprint stays the artists': their own frontmost and rearmost marks,
+    // whoever now leads.
+    float sFront = sAlong[0];
+    float sBack  = sAlong[0];
+    for (int k = 1; k < count; k++)
+    {
+        if (sAlong[k] > sFront) { sFront = sAlong[k]; }
+        if (sAlong[k] < sBack)  { sBack  = sAlong[k]; }
+    }
+    float depth  = sFront - sBack;          // the depth the artists used here
+    float lane   = sAcross[rank[0]];        // the front man's own authored lane
+
+    float minGap = GetConfigFloat(cfg, "intro_line_min_gap", 0.9f);
+    float maxGap = GetConfigFloat(cfg, "intro_line_max_gap", 2.0f);
+    float side   = GetConfigFloat(cfg, "intro_line_lane", 0.0f);
+    {
+        // Per-scene overrides, keyed on the scene name exactly as the log
+        // prints it, the same way Nis.cpp:288-299 does it.
+        const char* sceneType = NisLastType((int)nis->mTarget);
+        if (sceneType != NULL && sceneType[0] != 0)
+        {
+            char szKey[96];
+            nlSNPrintf(szKey, 96, "intro_line_min_gap_%s", sceneType);
+            minGap = GetConfigFloat(cfg, szKey, minGap);
+            nlSNPrintf(szKey, 96, "intro_line_max_gap_%s", sceneType);
+            maxGap = GetConfigFloat(cfg, szKey, maxGap);
+            nlSNPrintf(szKey, 96, "intro_line_lane_%s", sceneType);
+            side = GetConfigFloat(cfg, szKey, side);
+        }
+    }
+    if (minGap < 0.0f) minGap = 0.0f;
+    if (maxGap < minGap) maxGap = minGap;
+
+    float gap = depth / (float)(count - 1);
+    if (gap < minGap) gap = minGap;
+    if (gap > maxGap) gap = maxGap;
+    float overhang = gap * (float)(count - 1) - depth;
+    if (overhang < 0.0f) overhang = 0.0f;
+
+    OSReport("[mixed teams] line: '%s' heading (%.2f, %.2f) from %.2f m of authored travel, %d in the file, authored depth %.2f m, gap %.2f m, %.2f m past the last authored mark\n",
+             nis->mHeader->name, hx, hy, travel, count, depth, gap, overhang);
+
+    for (int r = 0; r < count; r++)
+    {
+        int k  = rank[r];
+        int ci = chr[k];
+        cSAnim* mine = nis->mCharacterControllers[ci]->m_pSAnim;
+        if (mine == NULL) continue;
+
+        float along  = sFront - gap * (float)r;
+        float across = lane + side;
+        float tx = hx * along + px * across;
+        float ty = hy * along + py * across;
+
+        // Where the animation he is actually DRAWN with starts. Everything here
+        // is raw, unmirrored animation space, which is exactly what Nis::Render
+        // expects: it mirrors the root at Nis.cpp:934 and negates shift.x at
+        // Nis.cpp:1041, and those two compose into the mirror image of this
+        // authored target. A character whose own root never moves (Donkey Kong,
+        // who travels in the node hierarchy) needs no special case: his root is
+        // a constant, so root + shift pins him to the mark and his hierarchy
+        // carries him forward from there, once.
+        nlVector3 own = { 0.0f, 0.0f, 0.0f };
+        mine->GetRootTrans(0.0f, &own);
+
+        Nis::ModIntro& st = nis->mMod[ci];
+        st.mode        = NIS_MOD_WALK;  // PLACEMENT; the animation may still be the slot's
+        st.lined       = true;
+        st.slotNumber  = r + 1;
+        st.shift.x     = tx - own.x;
+        st.shift.y     = ty - own.y;
+        st.shift.z     = 0.0f;          // height left exactly as it is today
+        st.shiftDone   = true;
+        st.walkGap     = 0.0f;          // the per-frame corrector is off for lined slots;
+        st.walkSide    = 0.0f;          // zeroing these means that even if it somehow ran
+        st.walkDelayOnly = false;       // it could only put him back on his own mark
+        st.lastDirX    = hx;
+        st.lastDirY    = hy;
+        st.delay       = 0.0f;          // a delayed walker is drawn frozen, never hidden
+        st.walkLogged  = 0;
+        st.walkLoggedT = -1.0f;
+
+        const char* who = (g_pCharacters[ci] != NULL)
+            ? GetCharacterName(((cPlayer*)g_pCharacters[ci])->m_eCharacterClass) : "?";
+        OSReport("[mixed teams] line: '%s' number %d is character %d (%s)%s, authored mark (%.2f, %.2f) -> stands at (%.2f, %.2f), own start (%.2f, %.2f), shift (%.2f, %.2f)\n",
+                 nis->mHeader->name, r + 1, ci, who,
+                 st.ownName[0] != 0 ? " (his own animation)" : " (the slot's animation)",
+                 hx * sAlong[k] + px * sAcross[k], hy * sAlong[k] + py * sAcross[k],
+                 tx, ty, own.x, own.y, st.shift.x, st.shift.y);
+    }
+}
+
 /**
  * Offset/Address/Size: 0x1658 | 0x8012CA68 | size: 0x53C
  */
@@ -380,6 +650,7 @@ Nis::Nis(NisHeader& header, char* data, int size)
         st.lastDirX = 0.0f;
         st.lastDirY = 0.0f;
         st.walkDelayOnly = false;
+        st.lined = false;
         st.walkLogged = 0;
         st.walkLoggedT = -1.0f;
         st.ownName[0] = 0;
@@ -477,6 +748,11 @@ Nis::Nis(NisHeader& header, char* data, int size)
         }
         chunk = (nlChunk*)((char*)chunk + uChunkSize + 8);
     }
+
+    // MOD (mixed teams): with every animation assigned, line the slots up on the
+    // artists' own marks. Last on purpose -- only now is it known which slots
+    // hold borrowed captains and which hold ordinary sidekicks.
+    NisLineUpSlots(this);
 }
 
 /**
@@ -712,7 +988,25 @@ void Nis::Render()
                 st.shiftDone = true;
                 OSReport("[mixed teams] intro: character %d face-off placed by (%.1f, %.1f)\n", i, st.shift.x, st.shift.y);
             }
-            if (st.mode == NIS_MOD_WALK)
+            if (st.mode == NIS_MOD_WALK && st.lined)
+            {
+                // MOD (mixed teams): already placed in single file at load, on
+                // the artists' own marks. Nothing to recompute per frame --
+                // just sample where he really is a few times across the shot,
+                // so the log still shows what happened.
+                float tNow = mCharacterControllers[i]->get_fTime();
+                if (st.walkLogged < 5 && tNow >= st.walkLoggedT + 0.25f)
+                {
+                    ++st.walkLogged;
+                    st.walkLoggedT = tNow;
+                    OSReport("[mixed teams] line: '%s' char %d number %d t=%.2f stands at (%.2f, %.2f, %.2f) shift (%.2f, %.2f)%s\n",
+                             mHeader->name, i, st.slotNumber, tNow,
+                             rootTrans.x + (mMirrored ? -st.shift.x : st.shift.x),
+                             rootTrans.y + st.shift.y, rootTrans.z,
+                             st.shift.x, st.shift.y, mMirrored ? " mirrored" : "");
+                }
+            }
+            else if (st.mode == NIS_MOD_WALK)
             {
                 // Follow the path as it bends: "behind" is the heading right now.
                 cSAnim* pAnim = mCharacterControllers[i]->m_pSAnim;

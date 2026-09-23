@@ -166,6 +166,7 @@ public:
         float lastDirX;                  // walk-in: last known heading
         float lastDirY;
         bool walkDelayOnly;              // walk-in: space by start time only
+        bool lined;                      // walk-in: placed by the single-file pass
         int walkLogged;                  // diagnostics: how many samples logged
         float walkLoggedT;               // diagnostics: controller time of the last sample
         char ownName[64];                // the own file's name, for its voice script
