@@ -1,0 +1,3 @@
+# Made by running report.py on the test folders
+test_data/*/report.html
+test_data/*/report_summary.md
