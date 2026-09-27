@@ -246,6 +246,8 @@ def check_source(src, where, key, ref, rep, cache, bits):
             return
     if not any(h in text for h in hints):
         rep.warn(where, "%s: %s doesn't mention it: %s" % (key, ref, text.strip()[:80]))
+    elif re.match(r"\s*(checkevent|checkflag|checkitem|checkkeyitem|checkscene|checkmapscene|iftrue|iffalse)\b", text):
+        rep.warn(where, "%s: %s only checks it, it doesn't change it: %s" % (key, ref, text.strip()[:80]))
 
 
 def check(src, presets):
