@@ -103,8 +103,23 @@ listed here.
 - **Blackthorn (C09):** the Dragon Shrine has a new back door; the Elder's
   test only starts from the front door. Dragon's Den 1F is a separate map.
   The quiz, badge and TM are the same.
-
-- **C11–C13 (League, Kanto, Red):** still being checked; this list will be completed.
+- **To the League (C11):** Route 23 is now two maps, `ROUTE_23_SOUTH`
+  (Zephyr to Storm badge checks) and `ROUTE_23_NORTH` (Mineral to Rising),
+  sharing one scene variable (the checkpoint records `ROUTE_23_NORTH` = 8).
+  The officers now push you back if you lack a badge. The Pokémon League
+  Gate has a new fly point (`ENGINE_FLYPOINT_POKEMON_LEAGUE`). The Lyra
+  farewell trigger in New Bark and the Route 27 landing moved; both are
+  still forced. Hall of Fame and `RespawnOneOffs` have no story change.
+- **Kanto (C12):** the Rock Tunnel B1F trainer is now Firebreather Cyd
+  (`EVENT_BEAT_FIREBREATHER_CYD`, same spot and party). Route 13 East and
+  West were merged into one `ROUTE_13` (Joshua and Kenny are still
+  forced). Cerulean City now shares Route 24's scene variable. Fuchsia
+  gained a zoo and the Fuchsia Aquarium, Route 10 North an optional wild
+  Electrode; the Power Plant, Vermilion, Cerulean, Fast Ship and Viridian
+  Gym changed only in layout or text on the main path.
+- **Red (C13):** no script change. Silver Cave Room 3 was redesigned and
+  Red now stands at (8,6). His team changed (Lapras and Machamp replace
+  Omastar and Gyarados), with the same top level (90).
 
 ## Renumbered and renamed names at a glance
 
