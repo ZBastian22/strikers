@@ -1,6 +1,6 @@
 # Story checkpoints in the dev version: notes per checkpoint
 
-Notes written while redoing `story_presets.lua` for the dev version (master 411e5913), giving `story_presets_dev.lua`. Paths and line numbers are in the dev source unless they say v3.2.3. Money shifts carried between checkpoints were applied when combining: +720 from C06 on (C03 and C05 payout changes) and -9720 from C10 on (six fewer forced battles in the Goldenrod Underground); C11-C13 also include Veteran Matt (+2960) and C12 Schoolboy Sherman (on foot back from Cinnabar).
+Notes written while redoing `story_presets.lua` for the dev version (master 411e5913), giving `story_presets_dev.lua`. Paths and line numbers are in the dev source unless they say v3.2.3. Money shifts carried between checkpoints were applied when combining: +720 from C06 on (C03 and C05 payout changes) and -9720 from C10 on (six fewer forced battles in the Goldenrod Underground); C09 and C11-C13 also include battles found forced when the story steps were traced with trainer sight lines (the same in both versions): Skier Maria, Skier Becky and Dragon Tamer Darin in C09; Hiker Erik, Cooltrainer Beth and Veteran Matt in C11; Schoolboy Sherman in C12.
 
 ## C01_STARTER: dev changes (dev 411e5913 vs v3.2.3)
 

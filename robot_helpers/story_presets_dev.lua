@@ -1470,6 +1470,9 @@ return {
       "EVENT_BEAT_COOLTRAINERF_LOLA",
       "EVENT_BLACKTHORN_CITY_GRAMPS_BLOCKS_DRAGONS_DEN",
       "EVENT_GOT_TM59_DRAGON_PULSE",
+      "EVENT_BEAT_SKIER_MARIA",
+      "EVENT_BEAT_SKIER_BECKY",
+      "EVENT_BEAT_DRAGON_TAMER_DARIN",
     },
     events_clear = {
       "EVENT_BOULDER_IN_ICE_PATH_1A",
@@ -1497,7 +1500,7 @@ return {
     taken = { },
     phone_numbers = { },
     pokemon_received = { },
-    money_hint = 103600,
+    money_hint = 111424,
     party_hint = {
       { "MEGANIUM", 48 },
       { "PIDGEOT", 44 },
@@ -1522,6 +1525,9 @@ return {
       ["EVENT_BEAT_COOLTRAINERF_LOLA"] = "maps/BlackthornGym1F.asm:72",
       ["EVENT_BLACKTHORN_CITY_GRAMPS_BLOCKS_DRAGONS_DEN"] = "maps/BlackthornGym1F.asm:74",
       ["EVENT_GOT_TM59_DRAGON_PULSE"] = "maps/DragonsDenB1F.asm:77",
+      ["EVENT_BEAT_SKIER_MARIA"] = "maps/IcePath1F.asm:24",
+      ["EVENT_BEAT_SKIER_BECKY"] = "maps/IcePathB1F.asm:85",
+      ["EVENT_BEAT_DRAGON_TAMER_DARIN"] = "maps/DragonsDenB1F.asm:252",
       ["EVENT_BOULDER_IN_ICE_PATH_1A"] = "maps/IcePathB1F.asm:50",
       ["EVENT_BOULDER_IN_ICE_PATH_2A"] = "maps/IcePathB1F.asm:55",
       ["EVENT_BOULDER_IN_ICE_PATH_3A"] = "maps/IcePathB1F.asm:60",
@@ -1552,6 +1558,7 @@ return {
       "DEV: the dev engine lets objects (e.g. Strength boulders) block trainer sight (home/trainers.asm, commit 55a3b907). That can only make trainers easier to avoid; no trainer is listed as forced here, and Clair's script sets the 5 gym trainers itself.",
       "money_hint NOT changed here (lead's merge rule): C10 now forces 5 fewer switch-room battles, so C10's money_hint dropped by 9720; carry that -9720 into C09 and every later checkpoint when merging.",
       "Line numbers in the older notes refer to v3.2.3.",
+      "Forced battles found when tracing story_steps.lua with trainer sight lines: Skier Maria (Ice Path 1F), Skier Becky (Ice Path B1F) and Dragon Tamer Darin (Dragon's Den B1F) can't be avoided on the main path. Added with their prize money (+7824). In dev the trainers stand on the same spots; Ice Path's blocks are unchanged, but Dragon's Den B1F was redrawn, so Darin's sight line wasn't re-checked on the dev collision.",
     },
   },
   {
@@ -1578,6 +1585,9 @@ return {
       "EVENT_BEAT_ELITE_FOUR",
       "EVENT_OLIVINE_PORT_SPRITES_BEFORE_HALL_OF_FAME",
       "EVENT_BATTLE_TOWER_OPEN",
+      "EVENT_BEAT_HIKER_ERIK",
+      "EVENT_BEAT_COOLTRAINERF_BETH",
+      "EVENT_BETH_ASKED_FOR_PHONE_NUMBER",
     },
     events_clear = {
       "EVENT_LANCES_ROOM_OAK_AND_MARY",
@@ -1613,7 +1623,7 @@ return {
     taken = { },
     phone_numbers = { },
     pokemon_received = { },
-    money_hint = 140900,
+    money_hint = 152248,
     party_hint = {
       { "MEGANIUM", 60 },
       { "PIDGEOT", 56 },
@@ -1642,6 +1652,9 @@ return {
       ["EVENT_BEAT_ELITE_FOUR"] = "maps/HallOfFame.asm:78",
       ["EVENT_OLIVINE_PORT_SPRITES_BEFORE_HALL_OF_FAME"] = "maps/HallOfFame.asm:80",
       ["EVENT_BATTLE_TOWER_OPEN"] = "maps/HallOfFame.asm:88",
+      ["EVENT_BEAT_HIKER_ERIK"] = "maps/Route45.asm:259",
+      ["EVENT_BEAT_COOLTRAINERF_BETH"] = "maps/Route26.asm:146",
+      ["EVENT_BETH_ASKED_FOR_PHONE_NUMBER"] = "maps/Route26.asm:159",
       ["EVENT_LANCES_ROOM_OAK_AND_MARY"] = "maps/LancesRoom.asm:23",
       ["EVENT_OLIVINE_PORT_SPRITES_AFTER_HALL_OF_FAME"] = "maps/HallOfFame.asm:81",
       ["EVENT_BATTLE_TOWER_CLOSED"] = "maps/HallOfFame.asm:89",
@@ -1683,6 +1696,7 @@ return {
       "DEV: PokemonLeagueGate now has a NEWMAP fly point (ENGINE_FLYPOINT_POKEMON_LEAGUE, maps/PokemonLeagueGate.asm:31; spawn ROUTE_26 8,6 in data/maps/spawn_points.asm:27). It is set when the player walks in from Route 26.",
       "Line numbers in the older notes refer to v3.2.3.",
       "NOT A DEV CHANGE (also true in v3.2.3, missed there): Victory Road 1F Veteran Matt (12,6, facing down, range 3) is unavoidable. From the entrance (11,21) the only way to the 2F ladder (3,3) is up the walled 2-wide bridge (x=12-13, y=9-13) and then west across column 12 at y=7-9, all inside his sight (collision path search; VR 1F collision and objects are identical in v3.2.3 and dev). So EVENT_BEAT_VETERANM_MATT (maps/VictoryRoad1F.asm:21) is added here. Drop it if the lead prefers to keep dev identical to the 3.2.3 list.",
+      "Added from the story steps: Hiker Erik (Route 45 path), Cooltrainer Beth (Route 26, answer NO to her number); Veteran Matt was already here. In dev they stand on the same spots; Route 26 was redrawn, so Beth's sight line wasn't re-checked on the dev collision.",
     },
   },
   {
@@ -1846,7 +1860,7 @@ return {
     taken = { },
     phone_numbers = { },
     pokemon_received = { },
-    money_hint = 168900,
+    money_hint = 182688,
     party_hint = {
       { "MEGANIUM", 72 },
       { "PIDGEOT", 68 },
@@ -2059,7 +2073,7 @@ return {
     taken = { },
     phone_numbers = { },
     pokemon_received = { },
-    money_hint = 230300,
+    money_hint = 244088,
     party_hint = {
       { "MEGANIUM", 90 },
       { "PIDGEOT", 86 },

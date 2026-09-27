@@ -25,6 +25,11 @@ what is guessed. The step-by-step trace for each checkpoint is at the end.
   data, blocking objects and trainer sight lines. Trainers that spin in
   place were treated as avoidable. This is the least certain part; see
   "Forced trainers" in each checkpoint's notes.
+- Later, `story_steps.lua` traced the same route step by step, checking
+  every trainer's line of sight on the way. Comparing the two found a few
+  forced battles and two Day-Care flags the checkpoints had missed; they
+  were added (see "Changed when combining" in C04, C09, C11 and C12), so
+  each chapter of steps now gives exactly its checkpoint's changes.
 - Every name and `sources` entry was then checked automatically with
   `check_presets.py` (every name exists in the 3.2.3 constants; every cited
   line exists and mentions the name, its badge, or the bit that stores the
@@ -137,9 +142,9 @@ but a save builder may want them:
    Tower 2F grunt M6 vs. M5 and the Underground entrance (C10), the Rocket
    hideout trap room (C08), the Ice Path boulders (C09).
 2. **Walking instead of flying.** Some traces say "fly to …" for travel
-   over maps that were already visited. On foot the flags are the same,
-   except that walking Blackthorn → Route 45 → Route 46 → New Bark at the
-   start of C11 may add trainers that weren't traced.
+   over maps that were already visited. On foot the flags are the same;
+   the extra trainers met on foot (Route 45, Route 1) were found when the
+   story steps were traced and are included.
 3. **Money** is a rough upper estimate (see Conventions).
 4. **Kanto (C12)** has the most freedom in order; see its notes.
 5. Flags that reset daily or weekly (`ENGINE_RED_IN_MOUNT_SILVER`,
@@ -161,10 +166,10 @@ In list order. Flag columns are set / cleared. "Received" counts key items, TMs/
 | C07_MINERAL | OLIVINE_POKECENTER_1F (5,6) | JASMINE (37) | +7 / −2 | +1 / −0 | 1 | 1 | 45100 | MEGANIUM 37 |
 | C08_GLACIER | MAHOGANY_POKECENTER_1F (5,6) | PRYCE (42) | +43 / −3 | +4 / −1 | 4 | 4 | 60600 | MEGANIUM 42 |
 | C10_TOWER | GOLDENROD_POKECOM_CENTER_1F (6,14) | ARCHER (44) | +34 / −6 | +0 / −2 | 3 | 3 | 107900 | MEGANIUM 45 |
-| C09_RISING | BLACKTHORN_POKECENTER_1F (5,6) | CLAIR (47) | +15 / −6 | +2 / −0 | 2 | 2 | 112600 | MEGANIUM 48 |
-| C11_CHAMPION | NEW_BARK_TOWN (15,6) | LANCE (60) | +18 / −7 | +2 / −0 | 11 | 0 | 146900 | MEGANIUM 60 |
-| C12_KANTO | VIRIDIAN_POKECENTER_1F (5,6) | BLUE (70) | +97 / −8 | +21 / −0 | 3 | 10 | 174900 | MEGANIUM 72 |
-| C13_POSTGAME | SILVER_CAVE_POKECENTER_1F (5,6) | RED (90) | +9 / −1 | +3 / −0 | 0 | 2 | 236300 | MEGANIUM 90 |
+| C09_RISING | BLACKTHORN_POKECENTER_1F (5,6) | CLAIR (47) | +18 / −6 | +2 / −0 | 2 | 2 | 120400 | MEGANIUM 48 |
+| C11_CHAMPION | NEW_BARK_TOWN (15,6) | LANCE (60) | +22 / −7 | +2 / −0 | 11 | 0 | 161200 | MEGANIUM 60 |
+| C12_KANTO | VIRIDIAN_POKECENTER_1F (5,6) | BLUE (70) | +97 / −8 | +21 / −0 | 3 | 10 | 191700 | MEGANIUM 72 |
+| C13_POSTGAME | SILVER_CAVE_POKECENTER_1F (5,6) | RED (90) | +9 / −1 | +3 / −0 | 0 | 2 | 253100 | MEGANIUM 90 |
 
 ## Trace notes per checkpoint
 
@@ -740,7 +745,12 @@ engine/overworld/scripting.asm (appear/disappear/elevator/startbattle); engine/e
 
 **Changed when combining the checkpoints** (these override the trace notes below):
 
+- added to `events_set`: `EVENT_BEAT_SKIER_MARIA` (maps/IcePath1F.asm:24)
+- added to `events_set`: `EVENT_BEAT_SKIER_BECKY` (maps/IcePathB1F.asm:85)
+- added to `events_set`: `EVENT_BEAT_DRAGON_TAMER_DARIN` (maps/DragonsDenB1F.asm:248)
+- `money_earned_estimate` set to 12524
 - Fly: HM_FLY is only given in Yellow Forest (maps/YellowForest.asm:148) at the end of an optional side quest, so the main-path player walks or surfs. Where the traced path says 'fly to', walking over already-visited maps gives the same flags.
+- Forced battles found when tracing story_steps.lua with trainer sight lines: Skier Maria (Ice Path 1F), Skier Becky (Ice Path B1F) and Dragon Tamer Darin (Dragon's Den B1F) can't be avoided on the main path. Added with their prize money (+7824).
 
 
 Start: right after C10 (RadioTower5F.asm director gives CLEAR_BELL; that script already set
@@ -818,9 +828,14 @@ Map geometry: the .ablk files rendered through data/tilesets/*_collision.asm (my
 **Changed when combining the checkpoints** (these override the trace notes below):
 
 - added to `events_clear`: `EVENT_ROUTE_36_SUDOWOODO` (engine/events/specials.asm:368)
+- added to `events_set`: `EVENT_BEAT_HIKER_ERIK` (maps/Route45.asm:245)
+- added to `events_set`: `EVENT_BEAT_COOLTRAINERF_BETH` (maps/Route26.asm:145)
+- added to `events_set`: `EVENT_BETH_ASKED_FOR_PHONE_NUMBER` (maps/Route26.asm:158)
+- added to `events_set`: `EVENT_BEAT_VETERANM_MATT` (maps/VictoryRoad1F.asm:21)
+- `money_earned_estimate` set to 40824
 - EVENT_ROUTE_36_SUDOWOODO: the Hall of Fame runs RespawnOneOffs (engine/events/specials.asm:340), which puts Sudowoodo back on Route 36 unless ENGINE_PLAYER_CAUGHT_SUDOWOODO is set. C05 assumes Sudowoodo was knocked out, not caught, so it is cleared here. If the save should have caught it instead, drop this clear and set ENGINE_PLAYER_CAUGHT_SUDOWOODO in C05.
 - Fly: HM_FLY is only given in Yellow Forest (maps/YellowForest.asm:148) at the end of an optional side quest, so the main-path player walks or surfs. Where the traced path says 'fly to', walking over already-visited maps gives the same flags.
-- C11 path starts with 'fly to New Bark'. On foot the natural way is Blackthorn -> Route 45 -> Route 46 -> Route 29; any trainers there that can't be avoided are NOT listed (not traced).
+- Forced battles found when tracing story_steps.lua with trainer sight lines: Hiker Erik (Route 45, on the walk Blackthorn -> Route 45 -> Route 46; either Erik or Cooltrainer Ryan is forced), Cooltrainer Beth (Route 26; answer NO to her phone number, which sets EVENT_BETH_ASKED_FOR_PHONE_NUMBER) and Veteran Matt (Victory Road 1F). Added with their prize money (+6484).
 
 
 Start: right after C09 (Clair's TM_DRAGON_PULSE in Dragon's Den, Blackthorn Pokemon Center).
@@ -903,9 +918,11 @@ Chokepoints were checked by rendering .ablk files through the tileset collision 
 
 - added to `scenes`: `ROUTE_24 = 1` (maps/Route24.asm:92)
 - added to `events_set`: `EVENT_BEAT_SCHOOLBOY_SHERMAN` (maps/Route1.asm:32)
+- `money_earned_estimate` set to 30440
 - Fly: HM_FLY is only given in Yellow Forest (maps/YellowForest.asm:148) at the end of an optional side quest, so the main-path player has no Fly. The trace's 'fly to X' steps are walks or surfs on foot. The story flags are the same, but walking may cross trainers that weren't traced (for example on Routes 5, 6 and 11).
 - ROUTE_24 scene 1: on foot, the way back from Cerulean Cape crosses the Route 24 bridge southward. The underfoot trigger at its north end sets scene 1 (maps/Route24.asm:86-92, also wWalkingOnBridge = 1), and nothing sets it back at the south end. With Fly it would stay 0. The scene only controls the bridge graphics and which bridge triggers are active.
 - EVENT_BEAT_SCHOOLBOY_SHERMAN: on foot (no Fly) the way back from Cinnabar to Viridian goes north on Route 1, where Schoolboy Sherman can't be avoided (one-way ledges). Found when tracing story_steps.lua.
+- money: +2440 for Schoolboy Sherman (Route 1, forced on foot).
 
 
 Start: New Bark after the credits, female player, Chikorita. End: VIRIDIAN_POKECENTER_1F (5,6), one step north of the entrance, right after Blue's badge and TM.

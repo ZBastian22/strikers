@@ -1415,6 +1415,9 @@ return {
       "EVENT_BEAT_COOLTRAINERF_LOLA",
       "EVENT_BLACKTHORN_CITY_GRAMPS_BLOCKS_DRAGONS_DEN",
       "EVENT_GOT_TM59_DRAGON_PULSE",
+      "EVENT_BEAT_SKIER_MARIA",
+      "EVENT_BEAT_SKIER_BECKY",
+      "EVENT_BEAT_DRAGON_TAMER_DARIN",
     },
     events_clear = {
       "EVENT_BOULDER_IN_ICE_PATH_1A",
@@ -1442,7 +1445,7 @@ return {
     taken = { },
     phone_numbers = { },
     pokemon_received = { },
-    money_hint = 112600,
+    money_hint = 120400,
     party_hint = {
       { "MEGANIUM", 48 },
       { "PIDGEOT", 44 },
@@ -1467,6 +1470,9 @@ return {
       ["EVENT_BEAT_COOLTRAINERF_LOLA"] = "maps/BlackthornGym1F.asm:72",
       ["EVENT_BLACKTHORN_CITY_GRAMPS_BLOCKS_DRAGONS_DEN"] = "maps/BlackthornGym1F.asm:74",
       ["EVENT_GOT_TM59_DRAGON_PULSE"] = "maps/DragonsDenB1F.asm:73",
+      ["EVENT_BEAT_SKIER_MARIA"] = "maps/IcePath1F.asm:24",
+      ["EVENT_BEAT_SKIER_BECKY"] = "maps/IcePathB1F.asm:85",
+      ["EVENT_BEAT_DRAGON_TAMER_DARIN"] = "maps/DragonsDenB1F.asm:248",
       ["EVENT_BOULDER_IN_ICE_PATH_1A"] = "maps/IcePathB1F.asm:50",
       ["EVENT_BOULDER_IN_ICE_PATH_2A"] = "maps/IcePathB1F.asm:55",
       ["EVENT_BOULDER_IN_ICE_PATH_3A"] = "maps/IcePathB1F.asm:60",
@@ -1492,6 +1498,7 @@ return {
       "The Dratini gift (DRATINI L15, with EXTREMESPEED if no quiz answer was wrong; EVENT_GOT_DRATINI) needs you to re-enter the shrine and talk to the Elder, so it is optional and not included. There is no EVENT_ANSWERED_DRAGON_MASTER_QUIZ_RIGHT in 3.2.3. A wrong answer only sets EVENT_ANSWERED_DRAGON_MASTER_QUIZ_WRONG, which the main path leaves clear.",
       "specialphonecall SPECIALCALL_MASTERBALL (DragonShrine.asm:150) only queues Elm's call (wSpecialPhoneCallID, not a flag). The Master Ball itself is optional (talk to Elm with the Rising Badge, ElmsLab.asm:409-411).",
       "Fly: HM_FLY is only given in Yellow Forest (maps/YellowForest.asm:148) at the end of an optional side quest, so the main-path player walks or surfs. Where the traced path says 'fly to', walking over already-visited maps gives the same flags.",
+      "Forced battles found when tracing story_steps.lua with trainer sight lines: Skier Maria (Ice Path 1F), Skier Becky (Ice Path B1F) and Dragon Tamer Darin (Dragon's Den B1F) can't be avoided on the main path. Added with their prize money (+7824).",
     },
   },
   {
@@ -1517,6 +1524,10 @@ return {
       "EVENT_BEAT_ELITE_FOUR",
       "EVENT_OLIVINE_PORT_SPRITES_BEFORE_HALL_OF_FAME",
       "EVENT_BATTLE_TOWER_OPEN",
+      "EVENT_BEAT_HIKER_ERIK",
+      "EVENT_BEAT_COOLTRAINERF_BETH",
+      "EVENT_BETH_ASKED_FOR_PHONE_NUMBER",
+      "EVENT_BEAT_VETERANM_MATT",
     },
     events_clear = {
       "EVENT_LANCES_ROOM_OAK_AND_MARY",
@@ -1551,7 +1562,7 @@ return {
     taken = { },
     phone_numbers = { },
     pokemon_received = { },
-    money_hint = 146900,
+    money_hint = 161200,
     party_hint = {
       { "MEGANIUM", 60 },
       { "PIDGEOT", 56 },
@@ -1579,6 +1590,10 @@ return {
       ["EVENT_BEAT_ELITE_FOUR"] = "maps/HallOfFame.asm:77",
       ["EVENT_OLIVINE_PORT_SPRITES_BEFORE_HALL_OF_FAME"] = "maps/HallOfFame.asm:79",
       ["EVENT_BATTLE_TOWER_OPEN"] = "maps/HallOfFame.asm:87",
+      ["EVENT_BEAT_HIKER_ERIK"] = "maps/Route45.asm:245",
+      ["EVENT_BEAT_COOLTRAINERF_BETH"] = "maps/Route26.asm:145",
+      ["EVENT_BETH_ASKED_FOR_PHONE_NUMBER"] = "maps/Route26.asm:158",
+      ["EVENT_BEAT_VETERANM_MATT"] = "maps/VictoryRoad1F.asm:21",
       ["EVENT_LANCES_ROOM_OAK_AND_MARY"] = "maps/LancesRoom.asm:22",
       ["EVENT_OLIVINE_PORT_SPRITES_AFTER_HALL_OF_FAME"] = "maps/HallOfFame.asm:80",
       ["EVENT_BATTLE_TOWER_CLOSED"] = "maps/HallOfFame.asm:88",
@@ -1614,7 +1629,7 @@ return {
       "The Master Ball from Elm (ElmsLab.asm:409-411, EVENT_GOT_MASTER_BALL_FROM_ELM) is optional, so it is not listed.",
       "EVENT_ROUTE_36_SUDOWOODO: the Hall of Fame runs RespawnOneOffs (engine/events/specials.asm:340), which puts Sudowoodo back on Route 36 unless ENGINE_PLAYER_CAUGHT_SUDOWOODO is set. C05 assumes Sudowoodo was knocked out, not caught, so it is cleared here. If the save should have caught it instead, drop this clear and set ENGINE_PLAYER_CAUGHT_SUDOWOODO in C05.",
       "Fly: HM_FLY is only given in Yellow Forest (maps/YellowForest.asm:148) at the end of an optional side quest, so the main-path player walks or surfs. Where the traced path says 'fly to', walking over already-visited maps gives the same flags.",
-      "C11 path starts with 'fly to New Bark'. On foot the natural way is Blackthorn -> Route 45 -> Route 46 -> Route 29; any trainers there that can't be avoided are NOT listed (not traced).",
+      "Forced battles found when tracing story_steps.lua with trainer sight lines: Hiker Erik (Route 45, on the walk Blackthorn -> Route 45 -> Route 46; either Erik or Cooltrainer Ryan is forced), Cooltrainer Beth (Route 26; answer NO to her phone number, which sets EVENT_BETH_ASKED_FOR_PHONE_NUMBER) and Veteran Matt (Victory Road 1F). Added with their prize money (+6484).",
     },
   },
   {
@@ -1778,7 +1793,7 @@ return {
     taken = { },
     phone_numbers = { },
     pokemon_received = { },
-    money_hint = 174900,
+    money_hint = 191700,
     party_hint = {
       { "MEGANIUM", 72 },
       { "PIDGEOT", 68 },
@@ -1948,6 +1963,7 @@ return {
       "Fly: HM_FLY is only given in Yellow Forest (maps/YellowForest.asm:148) at the end of an optional side quest, so the main-path player has no Fly. The trace's 'fly to X' steps are walks or surfs on foot. The story flags are the same, but walking may cross trainers that weren't traced (for example on Routes 5, 6 and 11).",
       "ROUTE_24 scene 1: on foot, the way back from Cerulean Cape crosses the Route 24 bridge southward. The underfoot trigger at its north end sets scene 1 (maps/Route24.asm:86-92, also wWalkingOnBridge = 1), and nothing sets it back at the south end. With Fly it would stay 0. The scene only controls the bridge graphics and which bridge triggers are active.",
       "EVENT_BEAT_SCHOOLBOY_SHERMAN: on foot (no Fly) the way back from Cinnabar to Viridian goes north on Route 1, where Schoolboy Sherman can't be avoided (one-way ledges). Found when tracing story_steps.lua.",
+      "money: +2440 for Schoolboy Sherman (Route 1, forced on foot).",
     },
   },
   {
@@ -1984,7 +2000,7 @@ return {
     taken = { },
     phone_numbers = { },
     pokemon_received = { },
-    money_hint = 236300,
+    money_hint = 253100,
     party_hint = {
       { "MEGANIUM", 90 },
       { "PIDGEOT", 86 },
