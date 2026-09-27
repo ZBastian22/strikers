@@ -31,9 +31,43 @@ folder> [story_presets.lua]`. It checks that every flag, item, map, species
 and phone name exists in the source's constants, that every `sources`
 entry points at a real line that mentions the name, and it replays the
 checkpoints in order to catch oddities (a flag set twice, an item taken
-that was never given). It exits with status 1 if it finds errors. Use it
-after editing the presets, or to check them against another version of the
-game.
+that was never given). It exits with status 1 if it finds errors. It
+works with both v3.2.3 and the dev version; use it after editing the
+presets.
+
+**`story_steps.lua`**: the main story as an ordered list of steps the
+robot can play, from a new game to beating Red, traced from the v3.2.3
+scripts. The chapters are the 13 checkpoints of `story_presets.lua` in the
+same order and with the same route and choices. Each step has an `id`, its
+`checkpoint`, a `title`, a `kind` (go, talk, read, step, answer, battle,
+use, wait) with the map and coordinates it needs (the same numbers as the
+.asm events), what it should change (`expect`: flags, items, Pokémon, the
+map you end on), the source lines, and any guesses. The comment at the top
+of the file describes every field. `dofile("story_steps.lua")` returns the
+list.
+
+**`check_steps.py`**: re-checks `story_steps.lua` against a source
+checkout. Run `python check_steps.py <polishedcrystal folder>
+[story_steps.lua] [--presets story_presets.lua]`. It checks every name,
+that each talk/read/step spot is a real person, sign or trigger on that
+map (with the right sprite), that other spots are inside the map, and that
+every source line exists. With `--presets` it also plays each chapter's
+flag changes and compares them with the matching checkpoint.
+
+**`DEV_CHANGES.md`**: what changed between v3.2.3 and the developers'
+version (branch `master`, commit `411e591`), which the port targets. It
+starts with the changes most likely to break a port, then the main-story
+changes, then everything else grouped by area (engine, text and formats;
+maps and scripts; game data), each with the files and one line on what
+changed. `dev_changes/` holds the long lists: every constant name added
+or removed (`names.md`), every map's added, removed or moved events
+(`map_events.md`), and the notes for the dev checkpoints
+(`story_presets_dev_notes.md`).
+
+**`story_presets_dev.lua`**: the same 13 checkpoints as
+`story_presets.lua`, redone for the developers' version. It has the same
+format, with source lines in the dev tree. Check it with
+`python check_presets.py <dev checkout> story_presets_dev.lua`.
 
 **`report.py`**: turns the robot's results into a report. Run
 `python report.py <results dir> [<more results dirs> ...]`, one dir per
