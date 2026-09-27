@@ -31,6 +31,8 @@ CHAPTERS = ["C01_STARTER", "C02_ZEPHYR", "C03_HIVE", "C04_PLAIN", "C05_FOG", "C0
 FIELD_MOVES = {"CUT", "SURF", "STRENGTH", "WHIRLPOOL", "WATERFALL", "ROCK_SMASH", "FLASH", "HEADBUTT",
                "FLY", "DIG", "TELEPORT", "SWEET_SCENT", "FRESH_WATER"}
 WATER_MOVES = {"SURF", "WATERFALL", "WHIRLPOOL"}
+# Actions that aren't an item or move: tune the Pokegear radio to the Poke Flute station.
+SPECIAL_USES = {"POKE_FLUTE_RADIO"}
 
 EVENT_LINE = re.compile(
     r"\s*(object_event|warp_event|coord_event|bg_event|itemball_event|keyitemball_event|tmhmball_event|"
@@ -242,7 +244,7 @@ def check(src, steps, presets=None):
                 at("target_x", "target_y", objects, "trainer object")
         elif kind == "use":
             u = st.get("use")
-            if u not in FIELD_MOVES and u not in moves and u not in names["item"] and u not in names["key_item"]:
+            if u not in FIELD_MOVES | SPECIAL_USES and u not in moves and u not in names["item"] and u not in names["key_item"]:
                 rep.error(sid, "use %r isn't a field move, move or item" % u)
             if st.get("target_x") is not None:
                 hits = at("target_x", "target_y", objects | {"bg_event", "coord_event"}, None)

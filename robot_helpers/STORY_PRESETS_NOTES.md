@@ -163,7 +163,7 @@ In list order. Flag columns are set / cleared. "Received" counts key items, TMs/
 | C10_TOWER | GOLDENROD_POKECOM_CENTER_1F (6,14) | ARCHER (44) | +34 / −6 | +0 / −2 | 3 | 3 | 107900 | MEGANIUM 45 |
 | C09_RISING | BLACKTHORN_POKECENTER_1F (5,6) | CLAIR (47) | +15 / −6 | +2 / −0 | 2 | 2 | 112600 | MEGANIUM 48 |
 | C11_CHAMPION | NEW_BARK_TOWN (15,6) | LANCE (60) | +18 / −7 | +2 / −0 | 11 | 0 | 146900 | MEGANIUM 60 |
-| C12_KANTO | VIRIDIAN_POKECENTER_1F (5,6) | BLUE (70) | +96 / −8 | +21 / −0 | 3 | 10 | 174900 | MEGANIUM 72 |
+| C12_KANTO | VIRIDIAN_POKECENTER_1F (5,6) | BLUE (70) | +97 / −8 | +21 / −0 | 3 | 10 | 174900 | MEGANIUM 72 |
 | C13_POSTGAME | SILVER_CAVE_POKECENTER_1F (5,6) | RED (90) | +9 / −1 | +3 / −0 | 0 | 2 | 236300 | MEGANIUM 90 |
 
 ## Trace notes per checkpoint
@@ -398,8 +398,9 @@ BUGSY party 1 (data/trainers/parties.asm:116, the only normal party): BUTTERFREE
 
 **Changed when combining the checkpoints** (these override the trace notes below):
 
-- added to `events_set`: `EVENT_DAYCARE_MON_1` (maps/Route34.asm:69) and `EVENT_DAYCARE_MON_2` (maps/Route34.asm:79)
-- EVENT_DAYCARE_MON_1/2: Route 34's callback hides both Day-Care Pokemon when the Day-Care is empty, so they are set on the first visit. Found when tracing story_steps.lua.
+- added to `events_set`: `EVENT_DAYCARE_MON_1` (maps/Route34.asm:69)
+- added to `events_set`: `EVENT_DAYCARE_MON_2` (maps/Route34.asm:79)
+- EVENT_DAYCARE_MON_1/2: Route 34's callback hides both Day-Care Pokemon when the Day-Care is empty (maps/Route34.asm:69, :79), so they are set on the first visit. Found when tracing story_steps.lua.
 
 
 Start: right after Bugsy gives TM_U_TURN (AzaleaGym.asm:74-75). End: GOLDENROD_POKECOM_CENTER_1F (6,14),
@@ -901,8 +902,10 @@ Chokepoints were checked by rendering .ablk files through the tileset collision 
 **Changed when combining the checkpoints** (these override the trace notes below):
 
 - added to `scenes`: `ROUTE_24 = 1` (maps/Route24.asm:92)
+- added to `events_set`: `EVENT_BEAT_SCHOOLBOY_SHERMAN` (maps/Route1.asm:32)
 - Fly: HM_FLY is only given in Yellow Forest (maps/YellowForest.asm:148) at the end of an optional side quest, so the main-path player has no Fly. The trace's 'fly to X' steps are walks or surfs on foot. The story flags are the same, but walking may cross trainers that weren't traced (for example on Routes 5, 6 and 11).
 - ROUTE_24 scene 1: on foot, the way back from Cerulean Cape crosses the Route 24 bridge southward. The underfoot trigger at its north end sets scene 1 (maps/Route24.asm:86-92, also wWalkingOnBridge = 1), and nothing sets it back at the south end. With Fly it would stay 0. The scene only controls the bridge graphics and which bridge triggers are active.
+- EVENT_BEAT_SCHOOLBOY_SHERMAN: on foot (no Fly) the way back from Cinnabar to Viridian goes north on Route 1, where Schoolboy Sherman can't be avoided (one-way ledges). Found when tracing story_steps.lua.
 
 
 Start: New Bark after the credits, female player, Chikorita. End: VIRIDIAN_POKECENTER_1F (5,6), one step north of the entrance, right after Blue's badge and TM.
