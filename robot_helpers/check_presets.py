@@ -135,6 +135,27 @@ def consts(lines, prefix=""):
     return names
 
 
+def engine_bits(src):
+    """ENGINE_* name -> the bit name that stores it (data/events/engine_flags.asm),
+    because engine code often sets the bit directly (e.g. STATUSFLAGS_HALL_OF_FAME_F)."""
+    names = []
+    for line in read(src, "constants/engine_flags.asm"):
+        m = re.match(r"\s*const\s+([A-Z0-9_]+)", line)
+        if m:
+            names.append(m.group(1))
+        m = re.match(r"\s*const_skip\b\s*(\d*)", line)
+        if m:
+            names += [None] * int(m.group(1) or 1)
+    bits = []
+    for line in read(src, "data/events/engine_flags.asm"):
+        m = re.match(r"\s*engine_flag\s+\w+\s*,\s*([A-Za-z0-9_]+)", line)
+        if m:
+            bits.append(m.group(1))
+    if len(names) != len(bits):
+        return {}
+    return {n: b for n, b in zip(names, bits) if n}
+
+
 def load_names(src):
     items_lines = read(src, "constants/item_constants.asm")
     key_start = next(i for i, l in enumerate(items_lines) if l.startswith("; key item ids"))
@@ -156,6 +177,7 @@ def load_names(src):
         if m:
             scene_maps.add(m.group(1))
     return {
+        "engine_bits": engine_bits(src),
         "event": consts(read(src, "constants/event_flags.asm"), "EVENT_"),
         "engine": consts(read(src, "constants/engine_flags.asm"), "ENGINE_"),
         "item": items,
@@ -195,7 +217,7 @@ def names_in(entries):
     return out
 
 
-def check_source(src, where, key, ref, rep, cache):
+def check_source(src, where, key, ref, rep, cache, bits):
     m = re.match(r"^(.+?):(\d+)$", str(ref))
     if not m:
         rep.error(where, "source for %s isn't file:line: %r" % (key, ref))
@@ -216,6 +238,8 @@ def check_source(src, where, key, ref, rep, cache):
     hints = {name}
     if name.startswith("ENGINE_") and name.endswith("BADGE"):
         hints.add(name[len("ENGINE_"):])        # givebadge FOGBADGE, ...
+    if name in bits and not bits[name].isdigit():
+        hints.add(bits[name])                   # set STATUSFLAGS_HALL_OF_FAME_F, [hl]
     if key.startswith("scene:"):
         hints |= {"setscene", "setmapscene"}
         if "sceneid" in text.lower():  # dwb wGoldenrodCitySceneID, $1
@@ -289,7 +313,7 @@ def check(src, presets):
             if key not in sources:
                 rep.warn(cid, "no source for %s" % key)
         for key, ref in sources.items():
-            check_source(src, cid, str(key), ref, rep, cache)
+            check_source(src, cid, str(key), ref, rep, cache, names["engine_bits"])
 
         # Replay the checkpoints in order.
         for n in names_in(cp.get("events_set")):
