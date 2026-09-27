@@ -155,7 +155,7 @@ In list order. Flag columns are set / cleared. "Received" counts key items, TMs/
 | C01_STARTER | ELMS_LAB (4,10) | RIVAL0 (5) | +187 / −5 | +8 / −0 | 9 | 1 | 3600 | CHIKORITA 7 |
 | C02_ZEPHYR | VIOLET_POKECENTER_1F (5,6) | FALKNER (13) | +19 / −2 | +3 / −0 | 4 | 3 | 5900 | CHIKORITA 14 |
 | C03_HIVE | AZALEA_POKECENTER_1F (5,6) | BUGSY (17) | +23 / −5 | +3 / −0 | 3 | 2 | 10400 | BAYLEEF 18 |
-| C04_PLAIN | GOLDENROD_POKECOM_CENTER_1F (6,14) | WHITNEY (21) | +14 / −2 | +3 / −0 | 3 | 2 | 15000 | BAYLEEF 23 |
+| C04_PLAIN | GOLDENROD_POKECOM_CENTER_1F (6,14) | WHITNEY (21) | +16 / −2 | +3 / −0 | 3 | 2 | 15000 | BAYLEEF 23 |
 | C05_FOG | ECRUTEAK_POKECENTER_1F (5,6) | MORTY (26) | +22 / −2 | +2 / −0 | 5 | 2 | 22900 | BAYLEEF 28 |
 | C06_STORM | CIANWOOD_POKECENTER_1F (5,6) | CHUCK (31) | +18 / −0 | +3 / −0 | 1 | 3 | 41400 | MEGANIUM 33 |
 | C07_MINERAL | OLIVINE_POKECENTER_1F (5,6) | JASMINE (37) | +7 / −2 | +1 / −0 | 1 | 1 | 45100 | MEGANIUM 37 |
@@ -395,6 +395,11 @@ data/trainers/parties.asm and attributes.asm; engine/battle/core.asm (payout).
 BUGSY party 1 (data/trainers/parties.asm:116, the only normal party): BUTTERFREE 14, BEEDRILL 14, YANMA 14, SCYTHER 17.
 
 ### C04_PLAIN: Beat Whitney in Goldenrod City
+
+**Changed when combining the checkpoints** (these override the trace notes below):
+
+- added to `events_set`: `EVENT_DAYCARE_MON_1` (maps/Route34.asm:69) and `EVENT_DAYCARE_MON_2` (maps/Route34.asm:79)
+- EVENT_DAYCARE_MON_1/2: Route 34's callback hides both Day-Care Pokemon when the Day-Care is empty, so they are set on the first visit. Found when tracing story_steps.lua.
 
 
 Start: right after Bugsy gives TM_U_TURN (AzaleaGym.asm:74-75). End: GOLDENROD_POKECOM_CENTER_1F (6,14),

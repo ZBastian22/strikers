@@ -747,6 +747,8 @@ return {
       "EVENT_BEAT_LASS_CATHY",
       "EVENT_BEAT_SR_AND_JR_JO_AND_CATH",
       "EVENT_GOT_TM45_ATTRACT",
+      "EVENT_DAYCARE_MON_1",
+      "EVENT_DAYCARE_MON_2",
     },
     events_clear = {
       "EVENT_CHARCOAL_KILN_FARFETCH_D",
@@ -797,6 +799,8 @@ return {
       ["EVENT_BEAT_LASS_CATHY"] = "maps/GoldenrodGym.asm:43",
       ["EVENT_BEAT_SR_AND_JR_JO_AND_CATH"] = "maps/GoldenrodGym.asm:44",
       ["EVENT_GOT_TM45_ATTRACT"] = "maps/GoldenrodGym.asm:64",
+      ["EVENT_DAYCARE_MON_1"] = "maps/Route34.asm:69",
+      ["EVENT_DAYCARE_MON_2"] = "maps/Route34.asm:79",
       ["EVENT_CHARCOAL_KILN_FARFETCH_D"] = "maps/IlexForest.asm:366",
       ["EVENT_CHARCOAL_KILN_APPRENTICE"] = "maps/IlexForest.asm:367",
       ["ENGINE_FLYPOINT_GOLDENROD"] = "maps/GoldenrodCity.asm:74",
@@ -819,6 +823,7 @@ return {
       "Map constant GOLDENROD_POKECENTER_1F does not exist; Goldenrod's center is GOLDENROD_POKECOM_CENTER_1F (entrance warps (6,15)/(7,15)).",
       "Route 34 trainers (Camper Todd, Picnicker Gina, Breeder Julie, Pokefan Brandon) can all be avoided on the path (checked with a grid search over the collision data), so they are left out.",
       "Money = 4 x base reward x level of last mon (engine/battle/core.asm payout loop runs 4 times): rival 20x18x4=1440, Lyra 15x18x4=1080, Whitney 25x21x4=2100.",
+      "EVENT_DAYCARE_MON_1/2: Route 34's callback hides both Day-Care Pokemon when the Day-Care is empty (maps/Route34.asm:69, :79), so they are set on the first visit. Found when tracing story_steps.lua.",
     },
   },
   {
