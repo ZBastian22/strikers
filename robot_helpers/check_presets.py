@@ -217,7 +217,9 @@ def check_source(src, where, key, ref, rep, cache):
     if name.startswith("ENGINE_") and name.endswith("BADGE"):
         hints.add(name[len("ENGINE_"):])        # givebadge FOGBADGE, ...
     if key.startswith("scene:"):
-        hints |= {"setscene", "setmapscene", "scene"}
+        hints |= {"setscene", "setmapscene"}
+        if "sceneid" in text.lower():  # dwb wGoldenrodCitySceneID, $1
+            return
     if not any(h in text for h in hints):
         rep.warn(where, "%s: %s doesn't mention it: %s" % (key, ref, text.strip()[:80]))
 
